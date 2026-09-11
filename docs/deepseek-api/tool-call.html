@@ -1,0 +1,242 @@
+<article>
+    <nav>
+        <ul>
+            <li><a><svg>
+                        <path></path>
+                    </svg></a></li>
+            <li><span>API 指南</span>
+                <meta>
+            </li>
+            <li><span>Tool Calls</span>
+                <meta>
+            </li>
+        </ul>
+    </nav>
+    <div><button>本页总览</button></div>
+    <div>
+        <div>
+            <div>
+                <h1>Tool Calls</h1>
+                <p>Tool Calls 让模型能够调用外部工具，来增强自身能力。</p>
+                <hr>
+                <h2>非思考模式<a>​</a></h2>
+                <h3>样例代码<a>​</a></h3>
+                <p>这里以获取用户当前位置的天气信息为例，展示了使用 Tool Calls 的完整 Python 代码。</p>
+                <p>Tool Calls 的具体 API 格式请参考<a>对话补全</a>文档。</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>from</span><span> openai </span><span>import</span><span> OpenAI</span><br></span><span><span></span><br></span><span><span></span><span>def</span><span> </span><span>send_messages</span><span>(</span><span>messages</span><span>)</span><span>:</span><span></span><br></span><span><span>    response </span><span>=</span><span> client</span><span>.</span><span>chat</span><span>.</span><span>completions</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>        model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>        messages</span><span>=</span><span>messages</span><span>,</span><span></span><br></span><span><span>        tools</span><span>=</span><span>tools</span><br></span><span><span>    </span><span>)</span><span></span><br></span><span><span>    </span><span>return</span><span> response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><br></span><span><span></span><br></span><span><span>client </span><span>=</span><span> OpenAI</span><span>(</span><span></span><br></span><span><span>    api_key</span><span>=</span><span>"&lt;your api key&gt;"</span><span>,</span><span></span><br></span><span><span>    base_url</span><span>=</span><span>"https://api.deepseek.com"</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><br></span><span><span>tools </span><span>=</span><span> </span><span>[</span><span></span><br></span><span><span>    </span><span>{</span><span></span><br></span><span><span>        </span><span>"type"</span><span>:</span><span> </span><span>"function"</span><span>,</span><span></span><br></span><span><span>        </span><span>"function"</span><span>:</span><span> </span><span>{</span><span></span><br></span><span><span>            </span><span>"name"</span><span>:</span><span> </span><span>"get_weather"</span><span>,</span><span></span><br></span><span><span>            </span><span>"description"</span><span>:</span><span> </span><span>"Get weather of a location, the user should supply a location first."</span><span>,</span><span></span><br></span><span><span>            </span><span>"parameters"</span><span>:</span><span> </span><span>{</span><span></span><br></span><span><span>                </span><span>"type"</span><span>:</span><span> </span><span>"object"</span><span>,</span><span></span><br></span><span><span>                </span><span>"properties"</span><span>:</span><span> </span><span>{</span><span></span><br></span><span><span>                    </span><span>"location"</span><span>:</span><span> </span><span>{</span><span></span><br></span><span><span>                        </span><span>"type"</span><span>:</span><span> </span><span>"string"</span><span>,</span><span></span><br></span><span><span>                        </span><span>"description"</span><span>:</span><span> </span><span>"The city and state, e.g. San Francisco, CA"</span><span>,</span><span></span><br></span><span><span>                    </span><span>}</span><span></span><br></span><span><span>                </span><span>}</span><span>,</span><span></span><br></span><span><span>                </span><span>"required"</span><span>:</span><span> </span><span>[</span><span>"location"</span><span>]</span><span></span><br></span><span><span>            </span><span>}</span><span>,</span><span></span><br></span><span><span>        </span><span>}</span><span></span><br></span><span><span>    </span><span>}</span><span>,</span><span></span><br></span><span><span></span><span>]</span><span></span><br></span><span><span></span><br></span><span><span>messages </span><span>=</span><span> </span><span>[</span><span>{</span><span>"role"</span><span>:</span><span> </span><span>"user"</span><span>,</span><span> </span><span>"content"</span><span>:</span><span> </span><span>"How's the weather in Hangzhou, Zhejiang?"</span><span>}</span><span>]</span><span></span><br></span><span><span>message </span><span>=</span><span> send_messages</span><span>(</span><span>messages</span><span>)</span><span></span><br></span><span><span></span><span>print</span><span>(</span><span>f"User&gt;\t </span><span>{</span><span>messages</span><span>[</span><span>0</span><span>]</span><span>[</span><span>'content'</span><span>]</span><span>}</span><span>"</span><span>)</span><span></span><br></span><span><span></span><br></span><span><span>tool </span><span>=</span><span> message</span><span>.</span><span>tool_calls</span><span>[</span><span>0</span><span>]</span><span></span><br></span><span><span>messages</span><span>.</span><span>append</span><span>(</span><span>message</span><span>)</span><span></span><br></span><span><span></span><br></span><span><span>messages</span><span>.</span><span>append</span><span>(</span><span>{</span><span>"role"</span><span>:</span><span> </span><span>"tool"</span><span>,</span><span> </span><span>"tool_call_id"</span><span>:</span><span> tool</span><span>.</span><span>id</span><span>,</span><span> </span><span>"content"</span><span>:</span><span> </span><span>"24℃"</span><span>}</span><span>)</span><span></span><br></span><span><span>message </span><span>=</span><span> send_messages</span><span>(</span><span>messages</span><span>)</span><span></span><br></span><span><span></span><span>print</span><span>(</span><span>f"Model&gt;\t </span><span>{</span><span>message</span><span>.</span><span>content</span><span>}</span><span>"</span><span>)</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>这个例子的执行流程如下：</p>
+                <ol>
+                    <li>用户：询问现在的天气</li>
+                    <li>模型：返回 function <code>get_weather({location: 'Hangzhou'})</code></li>
+                    <li>用户：调用 function <code>get_weather({location: 'Hangzhou'})</code>，并传给模型。</li>
+                    <li>模型：返回自然语言，"The current temperature in Hangzhou is 24°C."</li>
+                </ol>
+                <p>注：上述代码中 <code>get_weather</code> 函数功能需由用户提供，模型本身不执行具体函数。</p>
+                <hr>
+                <h2>思考模式<a>​</a></h2>
+                <p>从 DeepSeek-V3.2 开始，API 支持了思考模式下的工具调用能力，详见<a>思考模式</a>。</p>
+                <hr>
+                <h2>在对话中间插入工具调用<a>​</a></h2>
+                <p>在部分 Agent 场景中，客户端需要把并非由模型生成的工具调用及其结果，动态插入到对话历史的中间。各 API 格式对此的支持情况不同：</p>
+                <ul>
+                    <li><a>Anthropic API</a>（<code>/messages</code>）与 <a>Responses API</a> 支持在对话中间插入工具调用消息，也支持在对话中间插入
+                        <code>system</code> 消息；</li>
+                    <li>Chat Completion 接口不支持在对话中间插入工具调用，但支持在对话中间插入 <code>system</code> 消息；如需插入工具调用，请改用 Anthropic API 或
+                        Responses API。</li>
+                </ul>
+                <hr>
+                <h2><code>strict</code> 模式（Beta）<a>​</a></h2>
+                <p>在 <code>strict</code> 模式下，模型在输出 Function 调用时会严格遵循 Function 的 JSON Schema 的格式要求，以确保模型输出的 Function
+                    符合用户的定义。在思考与非思考模式下的工具调用，均可使用 <code>strict</code> 模式。</p>
+                <p>要使用 <code>strict</code> 模式，需要：</p>
+                <ol>
+                    <li>用户需要设置 <code>base_url="https://api.deepseek.com/beta"</code> 来开启 Beta 功能</li>
+                    <li>在传入的 <code>tools</code> 列表中，所有 <code>function</code> 均需设置 <code>strict</code> 属性为
+                        <code>true</code></li>
+                    <li>服务端会对用户传入的 Function 的 JSON Schema 进行校验，如不符合规范，或遇到服务端不支持的 JSON Schema 类型，将返回错误信息</li>
+                </ol>
+                <p>以下是 <code>strict</code> 模式下 tool 的定义样例：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>    "type": "function",</span><br></span><span><span>    "function": {</span><br></span><span><span>        "name": "get_weather",</span><br></span><span><span>        "strict": true,</span><br></span><span><span>        "description": "Get weather of a location, the user should supply a location first.",</span><br></span><span><span>        "parameters": {</span><br></span><span><span>            "type": "object",</span><br></span><span><span>            "properties": {</span><br></span><span><span>                "location": {</span><br></span><span><span>                    "type": "string",</span><br></span><span><span>                    "description": "The city and state, e.g. San Francisco, CA",</span><br></span><span><span>                }</span><br></span><span><span>            },</span><br></span><span><span>            "required": ["location"],</span><br></span><span><span>            "additionalProperties": false</span><br></span><span><span>        }</span><br></span><span><span>    }</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <hr>
+                <h3><code>strict</code> 模式支持的 JSON Schema 类型<a>​</a></h3>
+                <ul>
+                    <li>object</li>
+                    <li>string</li>
+                    <li>number</li>
+                    <li>integer</li>
+                    <li>boolean</li>
+                    <li>array</li>
+                    <li>enum</li>
+                    <li>anyOf</li>
+                </ul>
+                <hr>
+                <h4>object 类型<a>​</a></h4>
+                <p>object 定义一个包含键值对的深层结构，其中 properties 定义了对象中每个键（属性）的 schema。<strong>每个 <code>object</code> 的所有属性均需设置为
+                        <code>required</code>，且 <code>object</code> 中 <code>additionalProperties</code> 属性必须为
+                        <code>false</code></strong>。</p>
+                <p>示例：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>    "type": "object",</span><br></span><span><span>    "properties": {</span><br></span><span><span>        "name": { "type": "string" },</span><br></span><span><span>        "age": { "type": "integer" }</span><br></span><span><span>    },</span><br></span><span><span>    "required": ["name", "age"],</span><br></span><span><span>    "additionalProperties": false</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <hr>
+                <h4>string 类型<a>​</a></h4>
+                <ul>
+                    <li>支持的参数：
+                        <ul>
+                            <li>pattern：使用正则表达式来约束字符串的格式</li>
+                            <li>format：使用预定义的常见格式进行校验，目前支持：
+                                <ul>
+                                    <li>email：电子邮件地址</li>
+                                    <li>hostname：主机名</li>
+                                    <li>ipv4：IPv4 地址</li>
+                                    <li>ipv6：IPv6 地址</li>
+                                    <li>uuid：uuid</li>
+                                </ul>
+                            </li>
+                        </ul>
+                    </li>
+                    <li>不支持的参数
+                        <ul>
+                            <li>minLength</li>
+                            <li>maxLength</li>
+                        </ul>
+                    </li>
+                </ul>
+                <p>示例：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>    "type": "object",</span><br></span><span><span>    "properties": {</span><br></span><span><span>        "user_email": {</span><br></span><span><span>            "type": "string",</span><br></span><span><span>            "description": "The user's email address",</span><br></span><span><span>            "format": "email" </span><br></span><span><span>        },</span><br></span><span><span>        "zip_code": {</span><br></span><span><span>            "type": "string",</span><br></span><span><span>            "description": "Six digit postal code",</span><br></span><span><span>            "pattern": "^\\d{6}$"</span><br></span><span><span>        }</span><br></span><span><span>    }</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <hr>
+                <h4>number/integer 类型<a>​</a></h4>
+                <ul>
+                    <li>支持的参数
+                        <ul>
+                            <li>const：固定数字为常数</li>
+                            <li>default：数字的默认值</li>
+                            <li>minimum：最小值</li>
+                            <li>maximum：最大值</li>
+                            <li>exclusiveMinimum：不小于</li>
+                            <li>exclusiveMaximum：不大于</li>
+                            <li>multipleOf：数字输出为这个值的倍数</li>
+                        </ul>
+                    </li>
+                </ul>
+                <p>示例：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>    "type": "object",</span><br></span><span><span>    "properties": {</span><br></span><span><span>        "score": {</span><br></span><span><span>            "type": "integer",</span><br></span><span><span>            "description": "A number from 1-5, which represents your rating, the higher, the better",</span><br></span><span><span>            "minimum": 1,</span><br></span><span><span>            "maximum": 5</span><br></span><span><span>        }</span><br></span><span><span>    },</span><br></span><span><span>    "required": ["score"],</span><br></span><span><span>    "additionalProperties": false</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <hr>
+                <h4>array 类型<a>​</a></h4>
+                <ul>
+                    <li>不支持的参数
+                        <ul>
+                            <li>minItems</li>
+                            <li>maxItems</li>
+                        </ul>
+                    </li>
+                </ul>
+                <p>示例：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>    "type": "object",</span><br></span><span><span>    "properties": {</span><br></span><span><span>        "keywords": {</span><br></span><span><span>            "type": "array",</span><br></span><span><span>            "description": "Five keywords of the article, sorted by importance",</span><br></span><span><span>            "items": {</span><br></span><span><span>                "type": "string",</span><br></span><span><span>                "description": "A concise and accurate keyword or phrase."</span><br></span><span><span>            }</span><br></span><span><span>        }</span><br></span><span><span>    },</span><br></span><span><span>    "required": ["keywords"],</span><br></span><span><span>    "additionalProperties": false</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <hr>
+                <h4>enum<a>​</a></h4>
+                <p>enum 可以确保输出是预期的几个选项之一，例如在订单状态的场景下，只能是有限几个状态之一。</p>
+                <p>样例：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>    "type": "object",</span><br></span><span><span>    "properties": {</span><br></span><span><span>        "order_status": {</span><br></span><span><span>            "type": "string",</span><br></span><span><span>            "description": "Ordering status",</span><br></span><span><span>            "enum": ["pending", "processing", "shipped", "cancelled"]</span><br></span><span><span>        }</span><br></span><span><span>    }</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <hr>
+                <h4>anyOf<a>​</a></h4>
+                <p>匹配所提供的多个 schema 中的任意一个，可以处理可能具有多种有效格式的字段，例如用户的账户可能是邮箱或者手机号中的一个：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>    "type": "object",</span><br></span><span><span>    "properties": {</span><br></span><span><span>    "account": {</span><br></span><span><span>        "anyOf": [</span><br></span><span><span>            { "type": "string", "format": "email", "description": "可以是电子邮件地址" },</span><br></span><span><span>            { "type": "string", "pattern": "^\\d{11}$", "description": "或11位手机号码" }</span><br></span><span><span>        ]</span><br></span><span><span>    }</span><br></span><span><span>  }</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <hr>
+                <h4>$ref 和 $def<a>​</a></h4>
+                <p>可以使用 $def 定义模块，再用 $ref 引用以减少模式的重复和模块化，此外还可以单独使用 $ref 定义递归结构。</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>    "type": "object",</span><br></span><span><span>    "properties": {</span><br></span><span><span>        "report_date": {</span><br></span><span><span>            "type": "string",</span><br></span><span><span>            "description": "The date when the report was published"</span><br></span><span><span>        },</span><br></span><span><span>        "authors": {</span><br></span><span><span>            "type": "array",</span><br></span><span><span>            "description": "The authors of the report",</span><br></span><span><span>            "items": {</span><br></span><span><span>                "$ref": "#/$def/author"</span><br></span><span><span>            }</span><br></span><span><span>        }</span><br></span><span><span>    },</span><br></span><span><span>    "required": ["report_date", "authors"],</span><br></span><span><span>    "additionalProperties": false,</span><br></span><span><span>    "$def": {</span><br></span><span><span>        "author": {</span><br></span><span><span>            "type": "object",</span><br></span><span><span>            "properties": {</span><br></span><span><span>                "name": {</span><br></span><span><span>                    "type": "string",</span><br></span><span><span>                    "description": "author's name"</span><br></span><span><span>                },</span><br></span><span><span>                "institution": {</span><br></span><span><span>                    "type": "string",</span><br></span><span><span>                    "description": "author's institution"</span><br></span><span><span>                },</span><br></span><span><span>                "email": {</span><br></span><span><span>                    "type": "string",</span><br></span><span><span>                    "format": "email",</span><br></span><span><span>                    "description": "author's email"</span><br></span><span><span>                }</span><br></span><span><span>            },</span><br></span><span><span>            "additionalProperties": false,</span><br></span><span><span>            "required": ["name", "institution", "email"]</span><br></span><span><span>        }</span><br></span><span><span>    }</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div></div>
+</article>

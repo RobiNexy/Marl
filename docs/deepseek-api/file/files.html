@@ -1,0 +1,365 @@
+<article>
+    <nav>
+        <ul>
+            <li><a><svg>
+                        <path></path>
+                    </svg></a></li>
+            <li><span>API 指南</span>
+                <meta>
+            </li>
+            <li><span>Files API</span>
+                <meta>
+            </li>
+        </ul>
+    </nav>
+    <div><button>本页总览</button></div>
+    <div>
+        <div>
+            <div>
+                <h1>Files API</h1>
+                <p>Files API 让你上传图片，之后通过 <code>file_id</code> 引用。推荐在以下场景使用：</p>
+                <ul>
+                    <li>在多个请求中复用同一张图片，无需重复上传。</li>
+                    <li>发送会超过 48 MiB 请求体限制或 32 MiB 单图内联限制的图片（见 <a>图像理解：限制</a>）。</li>
+                </ul>
+                <p>上传的文件与 <code>deepseek-flash</code> 模型配合使用。如何在对话请求中引用已上传的文件，请参考 <a>图像理解</a>。</p>
+                <p>支持的格式：<strong>JPEG、PNG、GIF、WebP</strong>。格式由文件实际内容判断。</p>
+                <p>以下示例的 <code>base_url</code> 为 <code>https://api.deepseek.com</code>。</p>
+                <hr>
+                <h2>上传文件<a>​</a></h2>
+                <p>通过 <code>multipart/form-data</code> 请求向 <code>POST /files</code> 上传文件。单个文件最大 <strong>64
+                        MiB</strong>，上传需在 <strong>10 分钟</strong>内完成。</p>
+                <p>表单字段：</p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>字段</th>
+                            <th>是否必填</th>
+                            <th>说明</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>file</code></td>
+                            <td>是</td>
+                            <td>要上传的图片文件。</td>
+                        </tr>
+                        <tr>
+                            <td><code>purpose</code></td>
+                            <td>是</td>
+                            <td>必须为 <code>user_data</code>。</td>
+                        </tr>
+                        <tr>
+                            <td><code>expires_after[anchor]</code></td>
+                            <td>否</td>
+                            <td>若提供，必须为 <code>created_at</code>。需与 <code>expires_after[seconds]</code> 一起使用。</td>
+                        </tr>
+                        <tr>
+                            <td><code>expires_after[seconds]</code></td>
+                            <td>否</td>
+                            <td>有效期（秒），取值在 <code>3600</code> 到 <code>2592000</code> 之间（1 小时到 30 天）。不传这两个
+                                <code>expires_after</code> 字段则文件永久有效。</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div>
+                    <div>
+                        <pre><code><span><span>from</span><span> openai </span><span>import</span><span> OpenAI</span><br></span><span><span></span><br></span><span><span>client </span><span>=</span><span> OpenAI</span><span>(</span><span>api_key</span><span>=</span><span>"&lt;DeepSeek API Key&gt;"</span><span>,</span><span> base_url</span><span>=</span><span>"https://api.deepseek.com"</span><span>)</span><span></span><br></span><span><span></span><br></span><span><span></span><span>with</span><span> </span><span>open</span><span>(</span><span>"image.jpg"</span><span>,</span><span> </span><span>"rb"</span><span>)</span><span> </span><span>as</span><span> f</span><span>:</span><span></span><br></span><span><span>    uploaded </span><span>=</span><span> client</span><span>.</span><span>files</span><span>.</span><span>create</span><span>(</span><span>file</span><span>=</span><span>f</span><span>,</span><span> purpose</span><span>=</span><span>"user_data"</span><span>)</span><span></span><br></span><span><span></span><br></span><span><span></span><span>print</span><span>(</span><span>uploaded</span><span>.</span><span>id</span><span>)</span><span>  </span><span># file-api-xxxxxxxxxxxxxxxx</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <div>
+                    <div>
+                        <pre><code><span><span>curl https://api.deepseek.com/files \</span><br></span><span><span>  -H "Authorization: Bearer &lt;DeepSeek API Key&gt;" \</span><br></span><span><span>  -F purpose="user_data" \</span><br></span><span><span>  -F file="@image.jpg"</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>响应描述了已存储的文件：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>  "id": "file-api-xxxxxxxxxxxxxxxx",</span><br></span><span><span>  "object": "file",</span><br></span><span><span>  "bytes": 102400,</span><br></span><span><span>  "created_at": 1700000000,</span><br></span><span><span>  "filename": "image.jpg",</span><br></span><span><span>  "purpose": "user_data",</span><br></span><span><span>  "expires_at": 1700003600</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>只有在上传时设置了有效期，<code>expires_at</code> 才会出现。</p>
+                <hr>
+                <h2>列出文件<a>​</a></h2>
+                <div>
+                    <div>
+                        <pre><code><span><span>files </span><span>=</span><span> client</span><span>.</span><span>files</span><span>.</span><span>list</span><span>(</span><span>)</span><span></span><br></span><span><span></span><span>for</span><span> f </span><span>in</span><span> files</span><span>.</span><span>data</span><span>:</span><span></span><br></span><span><span>    </span><span>print</span><span>(</span><span>f</span><span>.</span><span>id</span><span>,</span><span> f</span><span>.</span><span>filename</span><span>)</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <div>
+                    <div>
+                        <pre><code><span><span>curl https://api.deepseek.com/files \</span><br></span><span><span>  -H "Authorization: Bearer &lt;DeepSeek API Key&gt;"</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>查询参数：</p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>参数</th>
+                            <th>说明</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>after</code></td>
+                            <td>用于分页的 <code>file_id</code> 游标；返回此文件之后的文件。</td>
+                        </tr>
+                        <tr>
+                            <td><code>limit</code></td>
+                            <td>返回的文件数量，取值在 <code>1</code> 到 <code>1000</code> 之间。</td>
+                        </tr>
+                        <tr>
+                            <td><code>order</code></td>
+                            <td>按创建时间排序：<code>asc</code>（默认）或 <code>desc</code>。</td>
+                        </tr>
+                        <tr>
+                            <td><code>purpose</code></td>
+                            <td>按用途过滤。仅支持 <code>user_data</code>。</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p>响应为分页列表：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>  "object": "list",</span><br></span><span><span>  "data": [</span><br></span><span><span>    {</span><br></span><span><span>      "id": "file-api-xxxxxxxxxxxxxxxx",</span><br></span><span><span>      "object": "file",</span><br></span><span><span>      "bytes": 102400,</span><br></span><span><span>      "created_at": 1700000000,</span><br></span><span><span>      "filename": "image.jpg",</span><br></span><span><span>      "purpose": "user_data"</span><br></span><span><span>    }</span><br></span><span><span>  ],</span><br></span><span><span>  "first_id": "file-api-xxxxxxxxxxxxxxxx",</span><br></span><span><span>  "last_id": "file-api-xxxxxxxxxxxxxxxx",</span><br></span><span><span>  "has_more": false</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <hr>
+                <h2>查询文件信息<a>​</a></h2>
+                <div>
+                    <div>
+                        <pre><code><span><span>info </span><span>=</span><span> client</span><span>.</span><span>files</span><span>.</span><span>retrieve</span><span>(</span><span>"file-api-xxxxxxxxxxxxxxxx"</span><span>)</span><span></span><br></span><span><span></span><span>print</span><span>(</span><span>info</span><span>.</span><span>filename</span><span>,</span><span> info</span><span>.</span><span>bytes</span><span>)</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <div>
+                    <div>
+                        <pre><code><span><span>curl https://api.deepseek.com/files/file-api-xxxxxxxxxxxxxxxx \</span><br></span><span><span>  -H "Authorization: Bearer &lt;DeepSeek API Key&gt;"</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <hr>
+                <h2>删除文件<a>​</a></h2>
+                <div>
+                    <div>
+                        <pre><code><span><span>client</span><span>.</span><span>files</span><span>.</span><span>delete</span><span>(</span><span>"file-api-xxxxxxxxxxxxxxxx"</span><span>)</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <div>
+                    <div>
+                        <pre><code><span><span>curl -X DELETE https://api.deepseek.com/files/file-api-xxxxxxxxxxxxxxxx \</span><br></span><span><span>  -H "Authorization: Bearer &lt;DeepSeek API Key&gt;"</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>  "id": "file-api-xxxxxxxxxxxxxxxx",</span><br></span><span><span>  "object": "file",</span><br></span><span><span>  "deleted": true</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <hr>
+                <h2>在对话请求中使用已上传的文件<a>​</a></h2>
+                <p>使用 <code>file</code> 内容块引用返回的 <code>file_id</code>：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>response </span><span>=</span><span> client</span><span>.</span><span>chat</span><span>.</span><span>completions</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>    model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>    messages</span><span>=</span><span>[</span><span></span><br></span><span><span>        </span><span>{</span><span></span><br></span><span><span>            </span><span>"role"</span><span>:</span><span> </span><span>"user"</span><span>,</span><span></span><br></span><span><span>            </span><span>"content"</span><span>:</span><span> </span><span>[</span><span></span><br></span><span><span>                </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"text"</span><span>,</span><span> </span><span>"text"</span><span>:</span><span> </span><span>"这张图片里有什么？"</span><span>}</span><span>,</span><span></span><br></span><span><span>                </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"file"</span><span>,</span><span> </span><span>"file_id"</span><span>:</span><span> </span><span>"file-api-xxxxxxxxxxxxxxxx"</span><span>}</span><span>,</span><span></span><br></span><span><span>            </span><span>]</span><span>,</span><span></span><br></span><span><span>        </span><span>}</span><span></span><br></span><span><span>    </span><span>]</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><span>print</span><span>(</span><span>response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><span>.</span><span>content</span><span>)</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>文件归属于你的 API key，可被任一 API 家族引用。注意：通过 Anthropic 兼容 <code>/messages</code> 端点引用文件时需携带
+                    <code>anthropic-beta: files-api-2025-04-14</code> 请求头。</p>
+                <p>与内联（base64）图片不同，通过 <code>file_id</code> 引用的文件不受 32 MiB 单图限制，请求中单张最大 64 MiB。</p>
+                <p><code>file</code> 块也可以通过 <code>file_data</code> 以 base64 形式内联携带图片，替代 <code>file_id</code>（二者互斥）。使用
+                    <code>file_data</code> 时还可设置 <code>filename</code>；<code>filename</code> 不能与 <code>file_id</code>
+                    同时出现。</p>
+                <hr>
+                <h2>Anthropic 兼容 Files API<a>​</a></h2>
+                <p>同样的文件操作也可通过 Anthropic 兼容端点使用，<code>base_url</code> 为
+                    <code>https://api.deepseek.com/anthropic</code>。所有请求<strong>必须</strong>带请求头
+                    <code>anthropic-beta: files-api-2025-04-14</code>。</p>
+                <p>端点位于 <code>/anthropic/v1/</code> 路径下：Anthropic SDK 设置上述 base URL 时会自动补上 <code>/v1</code>；直接用 curl 等裸
+                    HTTP 客户端时需要写完整路径。</p>
+                <p>这些端点（<code>POST /anthropic/v1/files</code>、<code>GET /anthropic/v1/files</code>、<code>GET /anthropic/v1/files/{file_id}</code>、<code>DELETE /anthropic/v1/files/{file_id}</code>）遵循
+                    Anthropic Files API 的形态，与上文 OpenAI 兼容版本存在差异：</p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th>OpenAI 兼容</th>
+                            <th>Anthropic 兼容</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>列表分页</td>
+                            <td><code>after</code></td>
+                            <td><code>after_id</code> / <code>before_id</code>（互斥）</td>
+                        </tr>
+                        <tr>
+                            <td>列表 <code>limit</code></td>
+                            <td>1–1000，默认 1000</td>
+                            <td>1–1000，默认 20</td>
+                        </tr>
+                        <tr>
+                            <td>列表 <code>order</code> / <code>purpose</code></td>
+                            <td>支持</td>
+                            <td>不支持</td>
+                        </tr>
+                        <tr>
+                            <td>列表顶层 <code>object</code></td>
+                            <td><code>"list"</code></td>
+                            <td>无</td>
+                        </tr>
+                        <tr>
+                            <td>文件对象大小字段</td>
+                            <td><code>bytes</code></td>
+                            <td><code>size_bytes</code></td>
+                        </tr>
+                        <tr>
+                            <td>文件对象类型字段</td>
+                            <td><code>object</code></td>
+                            <td><code>type</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>created_at</code></td>
+                            <td>Unix 时间戳（秒）</td>
+                            <td>RFC 3339 字符串</td>
+                        </tr>
+                        <tr>
+                            <td>必需请求头</td>
+                            <td>无</td>
+                            <td><code>anthropic-beta: files-api-2025-04-14</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p>Anthropic 兼容端点返回的文件对象形如：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>  "id": "file-api-xxxxxxxxxxxxxxxx",</span><br></span><span><span>  "type": "file",</span><br></span><span><span>  "size_bytes": 102400,</span><br></span><span><span>  "created_at": "2026-01-01T00:00:00+00:00",</span><br></span><span><span>  "filename": "image.jpg",</span><br></span><span><span>  "mime_type": "image/jpeg"</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>使用 <code>after_id</code> / <code>before_id</code> 游标列出文件：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>curl "https://api.deepseek.com/anthropic/v1/files?limit=20" \</span><br></span><span><span>  -H "x-api-key: &lt;DeepSeek API Key&gt;" \</span><br></span><span><span>  -H "anthropic-beta: files-api-2025-04-14"</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>  "data": [</span><br></span><span><span>    {</span><br></span><span><span>      "id": "file-api-xxxxxxxxxxxxxxxx",</span><br></span><span><span>      "type": "file",</span><br></span><span><span>      "size_bytes": 102400,</span><br></span><span><span>      "created_at": "2026-01-01T00:00:00+00:00",</span><br></span><span><span>      "filename": "image.jpg",</span><br></span><span><span>      "mime_type": "image/jpeg"</span><br></span><span><span>    }</span><br></span><span><span>  ],</span><br></span><span><span>  "first_id": "file-api-xxxxxxxxxxxxxxxx",</span><br></span><span><span>  "last_id": "file-api-xxxxxxxxxxxxxxxx",</span><br></span><span><span>  "has_more": false</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>删除文件返回 <code>{ "id": "...", "type": "file_deleted" }</code>。</p>
+                <hr>
+                <h2>限制<a>​</a></h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>限制项</th>
+                            <th>数值</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>支持的格式</td>
+                            <td>JPEG、PNG、GIF、WebP</td>
+                        </tr>
+                        <tr>
+                            <td>单个上传文件最大大小</td>
+                            <td>64 MiB</td>
+                        </tr>
+                        <tr>
+                            <td>文件名最大长度</td>
+                            <td>512 个字符</td>
+                        </tr>
+                        <tr>
+                            <td>单用户最大存储空间</td>
+                            <td>25 GiB</td>
+                        </tr>
+                        <tr>
+                            <td>单用户最大存储文件数</td>
+                            <td>10000</td>
+                        </tr>
+                        <tr>
+                            <td>文件有效期范围</td>
+                            <td>1 小时到 30 天，或不传 <code>expires_after</code> 永久有效</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div></div>
+</article>

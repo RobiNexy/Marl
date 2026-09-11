@@ -1,0 +1,281 @@
+<article>
+    <nav>
+        <ul>
+            <li><a><svg>
+                        <path></path>
+                    </svg></a></li>
+            <li><span>API 指南</span>
+                <meta>
+            </li>
+            <li><span>图像理解</span>
+                <meta>
+            </li>
+        </ul>
+    </nav>
+    <div><button>本页总览</button></div>
+    <div>
+        <div>
+            <div>
+                <h1>图像理解</h1>
+                <p><code>deepseek-flash</code> 模型支持在文本之外输入图片，你可以让模型描述图片、识别截图中的文字、分析图表等。旧模型名
+                    <code>deepseek-v4-flash-vision-exp</code> 仍可调用，但该模型已下线，其请求同样由最新的 Flash 模型承接。</p>
+                <p>支持的图片格式：<strong>JPEG、PNG、GIF、WebP</strong>。格式由文件实际内容判断，而非文件名或声明的 MIME 类型。</p>
+                <hr>
+                <h2>传入图片<a>​</a></h2>
+                <p>共有三种方式向模型提供图片，均使用标准的 OpenAI 兼容对话补全格式，即 <code>content</code> 为一个块（block）数组，而非纯字符串。同样的三种方式也适用于
+                    <a>Responses API</a>，图片以 <code>input_image</code> 内容块承载。</p>
+                <p>以下示例的 <code>base_url</code> 为 <code>https://api.deepseek.com</code>。</p>
+                <h3>1. Base64 编码图片（内联）<a>​</a></h3>
+                <p>将图片编码后以 <code>data:</code> URL 的形式直接嵌入请求。这是本地文件最简单的方式。编码后的数据会计入 <strong>48 MiB</strong> 请求体大小限制（见
+                    <a>限制</a>）。</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>import</span><span> base64</span><br></span><span><span></span><span>from</span><span> openai </span><span>import</span><span> OpenAI</span><br></span><span><span></span><br></span><span><span>client </span><span>=</span><span> OpenAI</span><span>(</span><span>api_key</span><span>=</span><span>"&lt;DeepSeek API Key&gt;"</span><span>,</span><span> base_url</span><span>=</span><span>"https://api.deepseek.com"</span><span>)</span><span></span><br></span><span><span></span><br></span><span><span></span><span>with</span><span> </span><span>open</span><span>(</span><span>"image.jpg"</span><span>,</span><span> </span><span>"rb"</span><span>)</span><span> </span><span>as</span><span> f</span><span>:</span><span></span><br></span><span><span>    b64 </span><span>=</span><span> base64</span><span>.</span><span>b64encode</span><span>(</span><span>f</span><span>.</span><span>read</span><span>(</span><span>)</span><span>)</span><span>.</span><span>decode</span><span>(</span><span>"utf-8"</span><span>)</span><span></span><br></span><span><span></span><br></span><span><span>response </span><span>=</span><span> client</span><span>.</span><span>chat</span><span>.</span><span>completions</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>    model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>    messages</span><span>=</span><span>[</span><span></span><br></span><span><span>        </span><span>{</span><span></span><br></span><span><span>            </span><span>"role"</span><span>:</span><span> </span><span>"user"</span><span>,</span><span></span><br></span><span><span>            </span><span>"content"</span><span>:</span><span> </span><span>[</span><span></span><br></span><span><span>                </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"text"</span><span>,</span><span> </span><span>"text"</span><span>:</span><span> </span><span>"这张图片里有什么？"</span><span>}</span><span>,</span><span></span><br></span><span><span>                </span><span>{</span><span></span><br></span><span><span>                    </span><span>"type"</span><span>:</span><span> </span><span>"image_url"</span><span>,</span><span></span><br></span><span><span>                    </span><span>"image_url"</span><span>:</span><span> </span><span>{</span><span>"url"</span><span>:</span><span> </span><span>f"data:image/jpeg;base64,</span><span>{</span><span>b64</span><span>}</span><span>"</span><span>}</span><span>,</span><span></span><br></span><span><span>                </span><span>}</span><span>,</span><span></span><br></span><span><span>            </span><span>]</span><span>,</span><span></span><br></span><span><span>        </span><span>}</span><span></span><br></span><span><span>    </span><span>]</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><span>print</span><span>(</span><span>response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><span>.</span><span>content</span><span>)</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <div>
+                    <div>
+                        <pre><code><span><span>curl https://api.deepseek.com/chat/completions \</span><br></span><span><span>  -H "Content-Type: application/json" \</span><br></span><span><span>  -H "Authorization: Bearer &lt;DeepSeek API Key&gt;" \</span><br></span><span><span>  -d '{</span><br></span><span><span>    "model": "deepseek-flash",</span><br></span><span><span>    "messages": [</span><br></span><span><span>      {</span><br></span><span><span>        "role": "user",</span><br></span><span><span>        "content": [</span><br></span><span><span>          {"type": "text", "text": "这张图片里有什么？"},</span><br></span><span><span>          {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,&lt;BASE64_DATA&gt;"}}</span><br></span><span><span>        ]</span><br></span><span><span>      }</span><br></span><span><span>    ]</span><br></span><span><span>  }'</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <h3>2. 外部图片 URL<a>​</a></h3>
+                <p>传入一个可公开访问的 <code>http(s)</code> 链接，模型会自动下载图片。URL 长度最多 <strong>8192 个字符</strong>，图片文件最大 <strong>32
+                        MiB</strong>，且需在 <strong>60 秒</strong>内完成下载。如果链接超长，请改用 base64 data URL 或 Files API。</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>response </span><span>=</span><span> client</span><span>.</span><span>chat</span><span>.</span><span>completions</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>    model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>    messages</span><span>=</span><span>[</span><span></span><br></span><span><span>        </span><span>{</span><span></span><br></span><span><span>            </span><span>"role"</span><span>:</span><span> </span><span>"user"</span><span>,</span><span></span><br></span><span><span>            </span><span>"content"</span><span>:</span><span> </span><span>[</span><span></span><br></span><span><span>                </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"text"</span><span>,</span><span> </span><span>"text"</span><span>:</span><span> </span><span>"描述一下这张图片。"</span><span>}</span><span>,</span><span></span><br></span><span><span>                </span><span>{</span><span></span><br></span><span><span>                    </span><span>"type"</span><span>:</span><span> </span><span>"image_url"</span><span>,</span><span></span><br></span><span><span>                    </span><span>"image_url"</span><span>:</span><span> </span><span>{</span><span>"url"</span><span>:</span><span> </span><span>"https://example.com/image.jpg"</span><span>}</span><span>,</span><span></span><br></span><span><span>                </span><span>}</span><span>,</span><span></span><br></span><span><span>            </span><span>]</span><span>,</span><span></span><br></span><span><span>        </span><span>}</span><span></span><br></span><span><span>    </span><span>]</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><span>print</span><span>(</span><span>response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><span>.</span><span>content</span><span>)</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <h3>3. 引用通过 Files API 上传的文件<a>​</a></h3>
+                <p>通过 <a>Files API</a> 上传一次图片，之后在请求中用其 <code>file_id</code> 引用。当你需要在多个请求中复用同一张图片，或图片会让请求体超过 48 MiB
+                    内联限制时，这是最佳选择。与内联图片不同，通过 Files API <code>file_id</code> 引用的图片最大可达 64 MiB，且不受 32 MiB 单图检查限制。</p>
+                <p>使用 <code>file</code> 内容块，填入返回的 <code>file_id</code>（形如 <code>file-api-...</code>）：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>response </span><span>=</span><span> client</span><span>.</span><span>chat</span><span>.</span><span>completions</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>    model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>    messages</span><span>=</span><span>[</span><span></span><br></span><span><span>        </span><span>{</span><span></span><br></span><span><span>            </span><span>"role"</span><span>:</span><span> </span><span>"user"</span><span>,</span><span></span><br></span><span><span>            </span><span>"content"</span><span>:</span><span> </span><span>[</span><span></span><br></span><span><span>                </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"text"</span><span>,</span><span> </span><span>"text"</span><span>:</span><span> </span><span>"这张图片里有什么？"</span><span>}</span><span>,</span><span></span><br></span><span><span>                </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"file"</span><span>,</span><span> </span><span>"file_id"</span><span>:</span><span> </span><span>"file-api-xxxxxxxxxxxxxxxx"</span><span>}</span><span>,</span><span></span><br></span><span><span>            </span><span>]</span><span>,</span><span></span><br></span><span><span>        </span><span>}</span><span></span><br></span><span><span>    </span><span>]</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><span>print</span><span>(</span><span>response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><span>.</span><span>content</span><span>)</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>此外，<code>file</code> 块也可以通过 <code>file_data</code> 以 base64 形式内联携带图片（<code>file_data</code> 与
+                    <code>file_id</code> 二者互斥）：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>  "type": "file",</span><br></span><span><span>  "file_data": "data:image/jpeg;base64,&lt;BASE64_DATA&gt;",</span><br></span><span><span>  "filename": "image.jpg"</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <hr>
+                <h2>细节级别（Detail Level）<a>​</a></h2>
+                <p>对于 <code>image_url</code> 输入，你可以选填 <code>detail</code> 字段来控制图片的处理方式：</p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>取值</th>
+                            <th>行为</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>low</code></td>
+                            <td>推理前将图片缩放到 512×512。当不需要精细视觉细节时更快、更省 token。</td>
+                        </tr>
+                        <tr>
+                            <td><code>high</code></td>
+                            <td>保留原图。（为兼容性提供，等价于 <code>original</code>。）</td>
+                        </tr>
+                        <tr>
+                            <td><code>original</code></td>
+                            <td>保留原图。</td>
+                        </tr>
+                        <tr>
+                            <td><code>auto</code></td>
+                            <td>自动选择。当前等价于 <code>original</code>。</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>  "type": "image_url",</span><br></span><span><span>  "image_url": {"url": "https://example.com/image.jpg", "detail": "low"}</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <hr>
+                <h2>何时使用 Files API<a>​</a></h2>
+                <p>内联图片（base64 或 <code>file_data</code>）会计入 <strong>48 MiB</strong> 的请求体大小限制。以下情况建议使用 <a>Files API</a>：
+                </p>
+                <ul>
+                    <li>单个请求会超过请求体大小限制。</li>
+                    <li>图片超过 32 MiB（只有通过 Files API 才能使用）。</li>
+                    <li>你在多个请求中引用同一张图片，希望避免每次重复上传。</li>
+                </ul>
+                <hr>
+                <h2>Token 用量<a>​</a></h2>
+                <p>图片会根据其尺寸换算成 token，并与文本 token 一起计费。</p>
+                <p>在进入模型前，每张图片都会被自动缩放：</p>
+                <ul>
+                    <li>总像素小于约 544×544 的图片会被保持长宽比放大；</li>
+                    <li>更大的图片会被保持长宽比缩小，缩小后的总像素约相当于 <strong>1300×1300</strong> 的图片。</li>
+                </ul>
+                <p>因此，每张图片消耗的 token 数存在上限（<strong>1024</strong> 个）：例如 2000×2000 和 5000×5000 的图片，经缩放后消耗的 token
+                    数是相同的。单个请求包含多张图片时，每张图片独立按同一规则计算，不存在额外的计算方式。</p>
+                <p>如需估算具体尺寸图片的 token 消耗，请使用 <a>Token 与用量计算</a> 页面的图片 Token 计算器。</p>
+                <hr>
+                <h2>限制<a>​</a></h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>限制项</th>
+                            <th>数值</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>支持的格式</td>
+                            <td>JPEG、PNG、GIF、WebP</td>
+                        </tr>
+                        <tr>
+                            <td>外部 URL 长度</td>
+                            <td>8192 个字符</td>
+                        </tr>
+                        <tr>
+                            <td>请求体大小</td>
+                            <td>48 MiB</td>
+                        </tr>
+                        <tr>
+                            <td>单张图片最大大小（base64 / 外部 URL）</td>
+                            <td>32 MiB</td>
+                        </tr>
+                        <tr>
+                            <td>单张图片最大大小（Files API <code>file_id</code>）</td>
+                            <td>64 MiB</td>
+                        </tr>
+                        <tr>
+                            <td>单个请求最大图片数</td>
+                            <td>600</td>
+                        </tr>
+                        <tr>
+                            <td>单个请求图片总大小</td>
+                            <td>不含 <code>file_id</code> 图片最多 64 MiB；包含 <code>file_id</code> 图片最高 200 MiB</td>
+                        </tr>
+                        <tr>
+                            <td>图片最大尺寸</td>
+                            <td>单边最长 8192 像素；单个请求包含 15 张及以上图片时，降为单边最长 4096 像素</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p>Files API 上传文件的存储与上传配额见 <a>Files API：限制</a>。</p>
+                <hr>
+                <h2>使用限制<a>​</a></h2>
+                <ul>
+                    <li>图片仅支持出现在 <code>user</code> 消息中。<code>system</code> 或 <code>assistant</code> 消息携带图片会返回
+                        <code>400</code> 错误。</li>
+                </ul>
+                <hr>
+                <h2>在 Anthropic API 中使用图片<a>​</a></h2>
+                <p>除了上面的 OpenAI 兼容端点，你也可以通过 Anthropic 兼容的 <code>/messages</code> 端点发送图片（<code>base_url</code> 为
+                    <code>https://api.deepseek.com/anthropic</code>）。基础配置请参考 <a>Anthropic API</a>。</p>
+                <p>区别在于图片内容块的结构。Anthropic 不使用 <code>image_url</code>，而是使用 <code>image</code> 块，其 <code>source</code> 对象的
+                    <code>type</code> 为 <code>base64</code>、<code>url</code> 或 <code>file</code> 之一：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>import</span><span> anthropic</span><br></span><span><span></span><br></span><span><span>client </span><span>=</span><span> anthropic</span><span>.</span><span>Anthropic</span><span>(</span><span>)</span><span>  </span><span># ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic</span><span></span><br></span><span><span></span><br></span><span><span>message </span><span>=</span><span> client</span><span>.</span><span>messages</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>    model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>    max_tokens</span><span>=</span><span>1024</span><span>,</span><span></span><br></span><span><span>    messages</span><span>=</span><span>[</span><span></span><br></span><span><span>        </span><span>{</span><span></span><br></span><span><span>            </span><span>"role"</span><span>:</span><span> </span><span>"user"</span><span>,</span><span></span><br></span><span><span>            </span><span>"content"</span><span>:</span><span> </span><span>[</span><span></span><br></span><span><span>                </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"text"</span><span>,</span><span> </span><span>"text"</span><span>:</span><span> </span><span>"这张图片里有什么？"</span><span>}</span><span>,</span><span></span><br></span><span><span>                </span><span>{</span><span></span><br></span><span><span>                    </span><span>"type"</span><span>:</span><span> </span><span>"image"</span><span>,</span><span></span><br></span><span><span>                    </span><span>"source"</span><span>:</span><span> </span><span>{</span><span></span><br></span><span><span>                        </span><span>"type"</span><span>:</span><span> </span><span>"base64"</span><span>,</span><span></span><br></span><span><span>                        </span><span>"media_type"</span><span>:</span><span> </span><span>"image/jpeg"</span><span>,</span><span></span><br></span><span><span>                        </span><span>"data"</span><span>:</span><span> </span><span>"&lt;BASE64_DATA&gt;"</span><span>,</span><span></span><br></span><span><span>                    </span><span>}</span><span>,</span><span></span><br></span><span><span>                </span><span>}</span><span>,</span><span></span><br></span><span><span>            </span><span>]</span><span>,</span><span></span><br></span><span><span>        </span><span>}</span><span></span><br></span><span><span>    </span><span>]</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><span>print</span><span>(</span><span>message</span><span>.</span><span>content</span><span>)</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>三种 <code>source</code> 变体与上面的 OpenAI 方式一一对应：</p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th><code>source.type</code></th>
+                            <th>对应的 OpenAI 方式</th>
+                            <th>说明</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>base64</code></td>
+                            <td>Base64 编码图片</td>
+                            <td>需要 <code>media_type</code>
+                                字段（<code>image/jpeg</code>、<code>image/png</code>、<code>image/gif</code> 或
+                                <code>image/webp</code>）。</td>
+                        </tr>
+                        <tr>
+                            <td><code>url</code></td>
+                            <td>外部图片 URL</td>
+                            <td>最多 8192 个字符。</td>
+                        </tr>
+                        <tr>
+                            <td><code>file</code></td>
+                            <td>Files API <code>file_id</code></td>
+                            <td>需要请求头 <code>anthropic-beta: files-api-2025-04-14</code>。</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <hr>
+                <h2>在 Responses API 中使用图片<a>​</a></h2>
+                <p><code>deepseek-flash</code> 模型同样支持通过 OpenAI 兼容的 <a>Responses API</a> 传入图片。三种传入方式（base64 data URL、外部
+                    <code>http(s)</code> URL、Files API <code>file_id</code>）与<a>限制</a>均与上文一致，只有内容块的结构不同——图片以
+                    <code>input_image</code> 内容块承载，可出现在 <code>user</code> / <code>developer</code> 消息或
+                    <code>function_call_output</code> / <code>custom_tool_call_output</code> item 的 <code>output</code>
+                    中：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>response </span><span>=</span><span> client</span><span>.</span><span>responses</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>    model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>    </span><span>input</span><span>=</span><span>[</span><span></span><br></span><span><span>        </span><span>{</span><span></span><br></span><span><span>            </span><span>"role"</span><span>:</span><span> </span><span>"user"</span><span>,</span><span></span><br></span><span><span>            </span><span>"content"</span><span>:</span><span> </span><span>[</span><span></span><br></span><span><span>                </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"input_text"</span><span>,</span><span> </span><span>"text"</span><span>:</span><span> </span><span>"这张图片里有什么？"</span><span>}</span><span>,</span><span></span><br></span><span><span>                </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"input_image"</span><span>,</span><span> </span><span>"image_url"</span><span>:</span><span> </span><span>"https://example.com/image.jpg"</span><span>,</span><span> </span><span>"detail"</span><span>:</span><span> </span><span>"low"</span><span>}</span><span>,</span><span></span><br></span><span><span>            </span><span>]</span><span>,</span><span></span><br></span><span><span>        </span><span>}</span><span></span><br></span><span><span>    </span><span>]</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><span>print</span><span>(</span><span>response</span><span>.</span><span>output_text</span><span>)</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p><code>input_image</code> 内容块支持 <code>detail</code> 字段，语义与上文一致（<code>low</code> / <code>high</code> /
+                    <code>original</code> / <code>auto</code>）。通过 <code>file_id</code> 传图时 <code>detail</code>
+                    被忽略；<code>image_url</code> 与 <code>file_id</code> 互斥。</p>
+                <p>字段语义、使用限制（<code>system</code> / <code>assistant</code> 消息中的图片会返回 <code>400</code> 错误）以及工具输出中的图片，请参阅
+                    <a>Responses API 指南</a>。</p>
+            </div>
+        </div>
+    </div>
+    <div></div>
+</article>

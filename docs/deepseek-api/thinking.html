@@ -1,0 +1,209 @@
+<article>
+    <nav>
+        <ul>
+            <li><a><svg>
+                        <path></path>
+                    </svg></a></li>
+            <li><span>API 指南</span>
+                <meta>
+            </li>
+            <li><span>思考模式</span>
+                <meta>
+            </li>
+        </ul>
+    </nav>
+    <div><button>本页总览</button></div>
+    <div>
+        <div>
+            <div>
+                <h1>思考模式</h1>
+                <p>DeepSeek 模型支持思考模式：在输出最终回答之前，模型会先输出一段思维链内容，以提升最终答案的准确性。</p>
+                <h2>思考模式开关与思考强度控制<a>​</a></h2>
+                <div><b>
+                        <table>
+                            <tr>
+                                <td></td>
+                                <td>控制参数（OpenAI 格式）</td>
+                                <td>控制参数（Anthropic 格式）</td>
+                                <td>控制参数（Responses API 格式）</td>
+                            </tr>
+                            <tr>
+                                <td>思考模式开关<sup>(1)</sup></td>
+                                <td><code>{"thinking": {"type": "enabled/disabled"}}</code></td>
+                                <td><code>{"reasoning": {"effort": "none/low/high/max"}}</code><br>(none 表示关闭思考模式)</td>
+                            </tr>
+                            <tr>
+                                <td>思考强度控制<sup>(2)</sup></td>
+                                <td><code>{"reasoning_effort": "low/high/max"}</code></td>
+                                <td><code>{"output_config": {"effort": "low/high/max"}}</code></td>
+                            </tr>
+                        </table>
+                    </b></div>
+                <div>
+                    <p>(1) 思考模式默认打开，且 effort 默认为 <code>high</code><br>
+                        (2) 用户设置的 effort 与模型推理 effort 映射表如下：</p>
+                    <table>
+                        <tr>
+                            <td>请求传入 effort</td>
+                            <td>实际映射 effort</td>
+                        </tr>
+                        <tr>
+                            <td>minimal</td>
+                            <td>low</td>
+                        </tr>
+                        <tr>
+                            <td>low</td>
+                            <td>low</td>
+                        </tr>
+                        <tr>
+                            <td>medium</td>
+                            <td>high</td>
+                        </tr>
+                        <tr>
+                            <td>high</td>
+                            <td>high</td>
+                        </tr>
+                        <tr>
+                            <td>xhigh</td>
+                            <td>high</td>
+                        </tr>
+                        <tr>
+                            <td>max</td>
+                            <td>max</td>
+                        </tr>
+                        <tr>
+                            <td>ultra</td>
+                            <td>max</td>
+                        </tr>
+                    </table>
+                </div>
+                <p>您在 OpenAI SDK 中使用 Chat Completion 设置 <code>thinking</code> 参数时，需要将 <code>thinking</code> 参数传入
+                    <code>extra_body</code> 中：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>response </span><span>=</span><span> client</span><span>.</span><span>chat</span><span>.</span><span>completions</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>  model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>  </span><span># ...</span><span></span><br></span><span><span>  reasoning_effort</span><span>=</span><span>"high"</span><span>,</span><span></span><br></span><span><span>  extra_body</span><span>=</span><span>{</span><span>"thinking"</span><span>:</span><span> </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"enabled"</span><span>}</span><span>}</span><span></span><br></span><span><span></span><span>)</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <h2>输入输出参数<a>​</a></h2>
+                <p>思考模式不支持 <code>temperature</code>、<code>presence_penalty</code>、<code>frequency_penalty</code>
+                    参数。请注意，为了兼容已有软件，设置参数不会报错，但也不会生效。</p>
+                <p><code>top_p</code> 在思考模式下生效，但下限为 <code>0.95</code>：小于 <code>0.95</code> 的值会被抬升至
+                    <code>0.95</code>。在非思考模式下，该参数恒为 <code>1.0</code>，传入的值会被忽略。</p>
+                <p>在思考模式下，思维链内容通过 <code>reasoning_content</code> 参数返回，与 <code>content</code>
+                    同级。在后续轮次的请求中，<code>reasoning_content</code> 是否需要回传、是否会被拼接进上下文，取决于请求是否携带 <code>tools</code> 参数：</p>
+                <ul>
+                    <li>若请求<strong>携带 <code>tools</code> 参数</strong>：历史轮次的 <code>reasoning_content</code> 均应回传给
+                        API，并会被拼接进上下文。详见<a>工具调用</a>。</li>
+                    <li>若请求<strong>未携带 <code>tools</code> 参数</strong>：<code>reasoning_content</code> 无需回传；即使传入
+                        API，也会被忽略，不会拼接进上下文。详见<a>多轮对话拼接</a>。</li>
+                </ul>
+                <h2>多轮对话拼接<a>​</a></h2>
+                <p>在每一轮对话过程中，模型会输出思维链内容（<code>reasoning_content</code>）和最终回答（<code>content</code>）。如果请求未携带
+                    <code>tools</code> 参数，则在下一轮对话中，之前轮输出的思维链内容不会被拼接到上下文中，如下图所示：</p>
+                <div><img></div>
+                <h3>样例代码<a>​</a></h3>
+                <p>下面的代码以 Python 语言为例，展示了如何访问思维链和最终回答，以及如何在多轮对话中进行上下文拼接。</p>
+
+                <div>
+                    <ul>
+                        <li>非流式</li>
+                        <li>流式</li>
+                    </ul>
+                    <div>
+                        <div>
+                            <div>
+                                <div>
+                                    <pre><code><span><span>from</span><span> openai </span><span>import</span><span> OpenAI</span><br></span><span><span>client </span><span>=</span><span> OpenAI</span><span>(</span><span>api_key</span><span>=</span><span>"&lt;DeepSeek API Key&gt;"</span><span>,</span><span> base_url</span><span>=</span><span>"https://api.deepseek.com"</span><span>)</span><span></span><br></span><span><span></span><br></span><span><span></span><span># Turn 1</span><span></span><br></span><span><span>messages </span><span>=</span><span> </span><span>[</span><span>{</span><span>"role"</span><span>:</span><span> </span><span>"user"</span><span>,</span><span> </span><span>"content"</span><span>:</span><span> </span><span>"9.11 and 9.8, which is greater?"</span><span>}</span><span>]</span><span></span><br></span><span><span>response </span><span>=</span><span> client</span><span>.</span><span>chat</span><span>.</span><span>completions</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>    model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>    messages</span><span>=</span><span>messages</span><span>,</span><span></span><br></span><span><span>    reasoning_effort</span><span>=</span><span>"high"</span><span></span><br></span><span><span>    extra_body</span><span>=</span><span>{</span><span>"thinking"</span><span>:</span><span> </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"enabled"</span><span>}</span><span>}</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><br></span><span><span>reasoning_content </span><span>=</span><span> response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><span>.</span><span>reasoning_content</span><br></span><span><span>content </span><span>=</span><span> response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><span>.</span><span>content</span><br></span><span><span></span><br></span><span><span></span><span># Turn 2</span><span></span><br></span><span><span></span><span># The reasoning_content will be ignored by the API</span><span></span><br></span><span><span>messages</span><span>.</span><span>append</span><span>(</span><span>response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><span>)</span><span></span><br></span><span><span>messages</span><span>.</span><span>append</span><span>(</span><span>{</span><span>'role'</span><span>:</span><span> </span><span>'user'</span><span>,</span><span> </span><span>'content'</span><span>:</span><span> </span><span>"How many Rs are there in the word 'strawberry'?"</span><span>}</span><span>)</span><span></span><br></span><span><span>response </span><span>=</span><span> client</span><span>.</span><span>chat</span><span>.</span><span>completions</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>    model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>    messages</span><span>=</span><span>messages</span><span>,</span><span></span><br></span><span><span>    reasoning_effort</span><span>=</span><span>"high"</span><span></span><br></span><span><span>    extra_body</span><span>=</span><span>{</span><span>"thinking"</span><span>:</span><span> </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"enabled"</span><span>}</span><span>}</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><span># ...</span><br></span></code></pre>
+                                    <div><button><svg>
+                                                <path></path>
+                                            </svg></button><button><span><svg>
+                                                    <path></path>
+                                                </svg><svg>
+                                                    <path></path>
+                                                </svg></span></button></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <div>
+                                <div>
+                                    <pre><code><span><span>from</span><span> openai </span><span>import</span><span> OpenAI</span><br></span><span><span>client </span><span>=</span><span> OpenAI</span><span>(</span><span>api_key</span><span>=</span><span>"&lt;DeepSeek API Key&gt;"</span><span>,</span><span> base_url</span><span>=</span><span>"https://api.deepseek.com"</span><span>)</span><span></span><br></span><span><span></span><br></span><span><span></span><span># Turn 1</span><span></span><br></span><span><span>messages </span><span>=</span><span> </span><span>[</span><span>{</span><span>"role"</span><span>:</span><span> </span><span>"user"</span><span>,</span><span> </span><span>"content"</span><span>:</span><span> </span><span>"9.11 and 9.8, which is greater?"</span><span>}</span><span>]</span><span></span><br></span><span><span>response </span><span>=</span><span> client</span><span>.</span><span>chat</span><span>.</span><span>completions</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>    model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>    messages</span><span>=</span><span>messages</span><span>,</span><span></span><br></span><span><span>    stream</span><span>=</span><span>True</span><span>,</span><span></span><br></span><span><span>    reasoning_effort</span><span>=</span><span>"high"</span><span></span><br></span><span><span>    extra_body</span><span>=</span><span>{</span><span>"thinking"</span><span>:</span><span> </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"enabled"</span><span>}</span><span>}</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><br></span><span><span>reasoning_content </span><span>=</span><span> </span><span>""</span><span></span><br></span><span><span>content </span><span>=</span><span> </span><span>""</span><span></span><br></span><span><span></span><br></span><span><span></span><span>for</span><span> chunk </span><span>in</span><span> response</span><span>:</span><span></span><br></span><span><span>    </span><span>if</span><span> chunk</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>delta</span><span>.</span><span>reasoning_content</span><span>:</span><span></span><br></span><span><span>        reasoning_content </span><span>+=</span><span> chunk</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>delta</span><span>.</span><span>reasoning_content</span><br></span><span><span>    </span><span>else</span><span>:</span><span></span><br></span><span><span>        content </span><span>+=</span><span> chunk</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>delta</span><span>.</span><span>content</span><br></span><span><span></span><br></span><span><span></span><span># Turn 2</span><span></span><br></span><span><span></span><span># The reasoning_content will be ignored by the API</span><span></span><br></span><span><span>messages</span><span>.</span><span>append</span><span>(</span><span>{</span><span>"role"</span><span>:</span><span> </span><span>"assistant"</span><span>,</span><span> </span><span>"reasoning_content"</span><span>:</span><span> reasoning_content</span><span>,</span><span> </span><span>"content"</span><span>:</span><span> content</span><span>}</span><span>)</span><span></span><br></span><span><span>messages</span><span>.</span><span>append</span><span>(</span><span>{</span><span>'role'</span><span>:</span><span> </span><span>'user'</span><span>,</span><span> </span><span>'content'</span><span>:</span><span> </span><span>"How many Rs are there in the word 'strawberry'?"</span><span>}</span><span>)</span><span></span><br></span><span><span>response </span><span>=</span><span> client</span><span>.</span><span>chat</span><span>.</span><span>completions</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>    model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>    messages</span><span>=</span><span>messages</span><span>,</span><span></span><br></span><span><span>    stream</span><span>=</span><span>True</span><span>,</span><span></span><br></span><span><span>    reasoning_effort</span><span>=</span><span>"high"</span><span></span><br></span><span><span>    extra_body</span><span>=</span><span>{</span><span>"thinking"</span><span>:</span><span> </span><span>{</span><span>"type"</span><span>:</span><span> </span><span>"enabled"</span><span>}</span><span>}</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><span># ...</span><br></span></code></pre>
+                                    <div><button><span><svg>
+                                                    <path></path>
+                                                </svg><svg>
+                                                    <path></path>
+                                                </svg></span></button></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <h2>工具调用<a>​</a></h2>
+                <p>DeepSeek 模型的思考模式支持工具调用功能。模型在输出最终答案之前，可以进行多轮的思考与工具调用，以提升答案的质量。其调用模式如下图所示：</p>
+                <div><img></div>
+                <p>请注意，携带了 <code>tools</code> 参数的请求，在后续所有请求中，必须完整回传 <code>reasoning_content</code> 给
+                    API——即使该轮模型未实际进行工具调用。若您的代码中未正确回传 <code>reasoning_content</code>，API 会返回 400 报错。正确回传方法请您参考下面的样例代码。
+                </p>
+                <h3>样例代码<a>​</a></h3>
+                <p>下面是一个简单的在思考模式下进行工具调用的样例代码：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>import</span><span> os</span><br></span><span><span></span><span>import</span><span> json</span><br></span><span><span></span><span>from</span><span> openai </span><span>import</span><span> OpenAI</span><br></span><span><span></span><span>from</span><span> datetime </span><span>import</span><span> datetime</span><br></span><span><span></span><br></span><span><span></span><span># The definition of the tools</span><span></span><br></span><span><span>tools </span><span>=</span><span> </span><span>[</span><span></span><br></span><span><span>    </span><span>{</span><span></span><br></span><span><span>        </span><span>"type"</span><span>:</span><span> </span><span>"function"</span><span>,</span><span></span><br></span><span><span>        </span><span>"function"</span><span>:</span><span> </span><span>{</span><span></span><br></span><span><span>            </span><span>"name"</span><span>:</span><span> </span><span>"get_date"</span><span>,</span><span></span><br></span><span><span>            </span><span>"description"</span><span>:</span><span> </span><span>"Get the current date"</span><span>,</span><span></span><br></span><span><span>            </span><span>"parameters"</span><span>:</span><span> </span><span>{</span><span> </span><span>"type"</span><span>:</span><span> </span><span>"object"</span><span>,</span><span> </span><span>"properties"</span><span>:</span><span> </span><span>{</span><span>}</span><span> </span><span>}</span><span>,</span><span></span><br></span><span><span>        </span><span>}</span><span></span><br></span><span><span>    </span><span>}</span><span>,</span><span></span><br></span><span><span>    </span><span>{</span><span></span><br></span><span><span>        </span><span>"type"</span><span>:</span><span> </span><span>"function"</span><span>,</span><span></span><br></span><span><span>        </span><span>"function"</span><span>:</span><span> </span><span>{</span><span></span><br></span><span><span>            </span><span>"name"</span><span>:</span><span> </span><span>"get_weather"</span><span>,</span><span></span><br></span><span><span>            </span><span>"description"</span><span>:</span><span> </span><span>"Get weather of a location, the user should supply the location and date."</span><span>,</span><span></span><br></span><span><span>            </span><span>"parameters"</span><span>:</span><span> </span><span>{</span><span></span><br></span><span><span>                </span><span>"type"</span><span>:</span><span> </span><span>"object"</span><span>,</span><span></span><br></span><span><span>                </span><span>"properties"</span><span>:</span><span> </span><span>{</span><span></span><br></span><span><span>                    </span><span>"location"</span><span>:</span><span> </span><span>{</span><span> </span><span>"type"</span><span>:</span><span> </span><span>"string"</span><span>,</span><span> </span><span>"description"</span><span>:</span><span> </span><span>"The city name"</span><span> </span><span>}</span><span>,</span><span></span><br></span><span><span>                    </span><span>"date"</span><span>:</span><span> </span><span>{</span><span> </span><span>"type"</span><span>:</span><span> </span><span>"string"</span><span>,</span><span> </span><span>"description"</span><span>:</span><span> </span><span>"The date in format YYYY-mm-dd"</span><span> </span><span>}</span><span>,</span><span></span><br></span><span><span>                </span><span>}</span><span>,</span><span></span><br></span><span><span>                </span><span>"required"</span><span>:</span><span> </span><span>[</span><span>"location"</span><span>,</span><span> </span><span>"date"</span><span>]</span><span></span><br></span><span><span>            </span><span>}</span><span>,</span><span></span><br></span><span><span>        </span><span>}</span><span></span><br></span><span><span>    </span><span>}</span><span>,</span><span></span><br></span><span><span></span><span>]</span><span></span><br></span><span><span></span><br></span><span><span></span><span># The mocked version of the tool calls</span><span></span><br></span><span><span></span><span>def</span><span> </span><span>get_date_mock</span><span>(</span><span>)</span><span>:</span><span></span><br></span><span><span>    </span><span>return</span><span> datetime</span><span>.</span><span>now</span><span>(</span><span>)</span><span>.</span><span>strftime</span><span>(</span><span>"%Y-%m-%d"</span><span>)</span><span></span><br></span><span><span></span><br></span><span><span></span><span>def</span><span> </span><span>get_weather_mock</span><span>(</span><span>location</span><span>,</span><span> date</span><span>)</span><span>:</span><span></span><br></span><span><span>    </span><span>return</span><span> </span><span>"Cloudy 7~13°C"</span><span></span><br></span><span><span></span><br></span><span><span>TOOL_CALL_MAP </span><span>=</span><span> </span><span>{</span><span></span><br></span><span><span>    </span><span>"get_date"</span><span>:</span><span> get_date_mock</span><span>,</span><span></span><br></span><span><span>    </span><span>"get_weather"</span><span>:</span><span> get_weather_mock</span><br></span><span><span></span><span>}</span><span></span><br></span><span><span></span><br></span><span><span></span><span>def</span><span> </span><span>run_turn</span><span>(</span><span>turn</span><span>,</span><span> messages</span><span>)</span><span>:</span><span></span><br></span><span><span>    sub_turn </span><span>=</span><span> </span><span>1</span><span></span><br></span><span><span>    </span><span>while</span><span> </span><span>True</span><span>:</span><span></span><br></span><span><span>        response </span><span>=</span><span> client</span><span>.</span><span>chat</span><span>.</span><span>completions</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>            model</span><span>=</span><span>'deepseek-flash'</span><span>,</span><span></span><br></span><span><span>            messages</span><span>=</span><span>messages</span><span>,</span><span></span><br></span><span><span>            tools</span><span>=</span><span>tools</span><span>,</span><span></span><br></span><span><span>            reasoning_effort</span><span>=</span><span>"high"</span><span>,</span><span></span><br></span><span><span>            extra_body</span><span>=</span><span>{</span><span> </span><span>"thinking"</span><span>:</span><span> </span><span>{</span><span> </span><span>"type"</span><span>:</span><span> </span><span>"enabled"</span><span> </span><span>}</span><span> </span><span>}</span><span>,</span><span></span><br></span><span><span>        </span><span>)</span><span></span><br></span><span><span>        messages</span><span>.</span><span>append</span><span>(</span><span>response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><span>)</span><span></span><br></span><span><span>        reasoning_content </span><span>=</span><span> response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><span>.</span><span>reasoning_content</span><br></span><span><span>        content </span><span>=</span><span> response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><span>.</span><span>content</span><br></span><span><span>        tool_calls </span><span>=</span><span> response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><span>.</span><span>tool_calls</span><br></span><span><span>        </span><span>print</span><span>(</span><span>f"Turn </span><span>{</span><span>turn</span><span>}</span><span>.</span><span>{</span><span>sub_turn</span><span>}</span><span>\n</span><span>{</span><span>reasoning_content</span><span>=</span><span>}</span><span>\n</span><span>{</span><span>content</span><span>=</span><span>}</span><span>\n</span><span>{</span><span>tool_calls</span><span>=</span><span>}</span><span>"</span><span>)</span><span></span><br></span><span><span>        </span><span># If there is no tool calls, then the model should get a final answer and we need to stop the loop</span><span></span><br></span><span><span>        </span><span>if</span><span> tool_calls </span><span>is</span><span> </span><span>None</span><span>:</span><span></span><br></span><span><span>            </span><span>break</span><span></span><br></span><span><span>        </span><span>for</span><span> tool </span><span>in</span><span> tool_calls</span><span>:</span><span></span><br></span><span><span>            tool_function </span><span>=</span><span> TOOL_CALL_MAP</span><span>[</span><span>tool</span><span>.</span><span>function</span><span>.</span><span>name</span><span>]</span><span></span><br></span><span><span>            tool_result </span><span>=</span><span> tool_function</span><span>(</span><span>**</span><span>json</span><span>.</span><span>loads</span><span>(</span><span>tool</span><span>.</span><span>function</span><span>.</span><span>arguments</span><span>)</span><span>)</span><span></span><br></span><span><span>            </span><span>print</span><span>(</span><span>f"tool result for </span><span>{</span><span>tool</span><span>.</span><span>function</span><span>.</span><span>name</span><span>}</span><span>: </span><span>{</span><span>tool_result</span><span>}</span><span>\n"</span><span>)</span><span></span><br></span><span><span>            messages</span><span>.</span><span>append</span><span>(</span><span>{</span><span></span><br></span><span><span>                </span><span>"role"</span><span>:</span><span> </span><span>"tool"</span><span>,</span><span></span><br></span><span><span>                </span><span>"tool_call_id"</span><span>:</span><span> tool</span><span>.</span><span>id</span><span>,</span><span></span><br></span><span><span>                </span><span>"content"</span><span>:</span><span> tool_result</span><span>,</span><span></span><br></span><span><span>            </span><span>}</span><span>)</span><span></span><br></span><span><span>        sub_turn </span><span>+=</span><span> </span><span>1</span><span></span><br></span><span><span>    </span><span>print</span><span>(</span><span>)</span><span></span><br></span><span><span></span><br></span><span><span>client </span><span>=</span><span> OpenAI</span><span>(</span><span></span><br></span><span><span>    api_key</span><span>=</span><span>os</span><span>.</span><span>environ</span><span>.</span><span>get</span><span>(</span><span>'DEEPSEEK_API_KEY'</span><span>)</span><span>,</span><span></span><br></span><span><span>    base_url</span><span>=</span><span>os</span><span>.</span><span>environ</span><span>.</span><span>get</span><span>(</span><span>'DEEPSEEK_BASE_URL'</span><span>)</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><br></span><span><span></span><span># The user starts a question</span><span></span><br></span><span><span>turn </span><span>=</span><span> </span><span>1</span><span></span><br></span><span><span>messages </span><span>=</span><span> </span><span>[</span><span>{</span><span></span><br></span><span><span>    </span><span>"role"</span><span>:</span><span> </span><span>"user"</span><span>,</span><span></span><br></span><span><span>    </span><span>"content"</span><span>:</span><span> </span><span>"How's the weather in Hangzhou Tomorrow"</span><span></span><br></span><span><span></span><span>}</span><span>]</span><span></span><br></span><span><span>run_turn</span><span>(</span><span>turn</span><span>,</span><span> messages</span><span>)</span><span></span><br></span><span><span></span><br></span><span><span></span><span># The user starts a new question</span><span></span><br></span><span><span>turn </span><span>=</span><span> </span><span>2</span><span></span><br></span><span><span>messages</span><span>.</span><span>append</span><span>(</span><span>{</span><span></span><br></span><span><span>    </span><span>"role"</span><span>:</span><span> </span><span>"user"</span><span>,</span><span></span><br></span><span><span>    </span><span>"content"</span><span>:</span><span> </span><span>"How's the weather in Guangzhou Tomorrow"</span><span></span><br></span><span><span></span><span>}</span><span>)</span><span></span><br></span><span><span>run_turn</span><span>(</span><span>turn</span><span>,</span><span> messages</span><span>)</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>在 Turn 1 的每个子请求中，都携带了该 Turn 下产生的 <code>reasoning_content</code> 给
+                    API，从而让模型继续之前的思考。<code>response.choices[0].message</code> 携带了 <code>assistant</code> 消息的所有必要字段，包括
+                    <code>content</code>、<code>reasoning_content</code>、<code>tool_calls</code>。简单起见，可以直接用如下代码将消息 append
+                    到 messages 结尾：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>messages.append(response.choices[0].message)</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>这行代码等价于：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>messages.append({</span><br></span><span><span>    'role': 'assistant',</span><br></span><span><span>    'content': response.choices[0].message.content,</span><br></span><span><span>    'reasoning_content': response.choices[0].message.reasoning_content,</span><br></span><span><span>    'tool_calls': response.choices[0].message.tool_calls,</span><br></span><span><span>})</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>且在 Turn 2 的请求中，我们仍然携带着 Turn1 所产生的 <code>reasoning_content</code> 给 API。</p>
+                <p>该代码的样例输出如下：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>Turn 1.1</span><br></span><span><span>reasoning_content="The user is asking about the weather in Hangzhou tomorrow. I need to get tomorrow's date first, then call the weather function."</span><br></span><span><span>content="Let me check tomorrow's weather in Hangzhou for you. First, let me get tomorrow's date."</span><br></span><span><span>tool_calls=[ChatCompletionMessageFunctionToolCall(id='call_00_kw66qNnNto11bSfJVIdlV5Oo', function=Function(arguments='{}', name='get_date'), type='function', index=0)]</span><br></span><span><span>tool result for get_date: 2026-04-19</span><br></span><span><span></span><br></span><span><span>Turn 1.2</span><br></span><span><span>reasoning_content="Today is 2026-04-19, so tomorrow is 2026-04-20. Now I'll call the weather function for Hangzhou."</span><br></span><span><span>content=''</span><br></span><span><span>tool_calls=[ChatCompletionMessageFunctionToolCall(id='call_00_H2SCW6136vWJGq9SQlBuhVt4', function=Function(arguments='{"location": "Hangzhou", "date": "2026-04-20"}', name='get_weather'), type='function', index=0)]</span><br></span><span><span>tool result for get_weather: Cloudy 7~13°C</span><br></span><span><span></span><br></span><span><span>Turn 1.3</span><br></span><span><span>reasoning_content='The weather result is in. Let me share this with the user.'</span><br></span><span><span>content="Here's the weather forecast for **Hangzhou tomorrow (April 20, 2026)**:\n\n- 🌤 **Condition:** Cloudy  \n- 🌡 **Temperature:** 7°C ~ 13°C (45°F ~ 55°F)\n\nIt'll be on the cooler side, so you might want to bring a light jacket if you're heading out! Let me know if you need anything else."</span><br></span><span><span>tool_calls=None</span><br></span><span><span></span><br></span><span><span>Turn 2.1</span><br></span><span><span>reasoning_content='The user is asking about the weather in Guangzhou tomorrow. Today is 2026-04-19, so tomorrow is 2026-04-20. I can directly call the weather function.'</span><br></span><span><span>content=''</span><br></span><span><span>tool_calls=[ChatCompletionMessageFunctionToolCall(id='call_00_8URkLt5NjmNkVKhDmMcNq9Mo', function=Function(arguments='{"location": "Guangzhou", "date": "2026-04-20"}', name='get_weather'), type='function', index=0)]</span><br></span><span><span>tool result for get_weather: Cloudy 7~13°C</span><br></span><span><span></span><br></span><span><span>Turn 2.2</span><br></span><span><span>reasoning_content='The weather result for Guangzhou is the same as Hangzhou. Let me share this with the user.'</span><br></span><span><span>content="Here's the weather forecast for **Guangzhou tomorrow (April 20, 2026)**:\n\n- 🌤 **Condition:** Cloudy  \n- 🌡 **Temperature:** 7°C ~ 13°C (45°F ~ 55°F)\n\nIt'll be cool and cloudy, so a light jacket would be a good idea if you're going out. Let me know if there's anything else you'd like to know!"</span><br></span><span><span>tool_calls=None</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div></div>
+</article>

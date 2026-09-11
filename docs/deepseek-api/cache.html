@@ -1,0 +1,134 @@
+<article>
+    <nav>
+        <ul>
+            <li><a><svg>
+                        <path></path>
+                    </svg></a></li>
+            <li><span>API 指南</span>
+                <meta>
+            </li>
+            <li><span>上下文硬盘缓存</span>
+                <meta>
+            </li>
+        </ul>
+    </nav>
+    <div><button>本页总览</button></div>
+    <div>
+        <div>
+            <div>
+                <h1>上下文硬盘缓存</h1>
+                <p>DeepSeek API 上下文硬盘缓存技术对所有用户默认开启，用户无需修改代码即可享用。</p>
+                <p>用户的每一个请求都会触发硬盘缓存的构建。若后续请求与之前的请求在前缀上存在重复，则重复部分只需要从缓存中拉取，计入“缓存命中”。</p>
+                <h2>缓存落盘与命中规则<a>​</a></h2>
+                <p>缓存命中的前提是相应前缀已被“落盘”（写入硬盘缓存）。受 Sliding Window Attention
+                    机制的影响，缓存前缀的存取与判别与之前有所不同。每条缓存前缀是一个独立的完整单元。后续请求只有在完整匹配<strong>缓存前缀单元</strong>时，才能命中缓存。</p>
+                <h3>缓存前缀落盘时机：<a>​</a></h3>
+                <ol>
+                    <li>
+                        <p><strong>请求结束位置落盘</strong>：每次请求的<strong>用户输入结束位置</strong>与<strong>模型输出结束位置</strong>，会产生两个<strong>缓存前缀单元</strong>。后续请求若<strong>完整</strong>匹配了它们，则可命中。
+                        </p>
+                    </li>
+                    <li>
+                        <p><strong>公共前缀检测落盘</strong>：当系统检测到多次请求之间存在公共前缀时，会将该公共前缀作为一个独立的<strong>缓存前缀单元</strong>进行落盘。后续请求若<strong>完整</strong>复用了该<strong>缓存前缀单元</strong>，则可命中。
+                        </p>
+                    </li>
+                    <li>
+                        <p><strong>按固定 token 间隔落盘</strong>：在长输入或长输出中，系统会以一定的 token
+                            数量为间隔，截取<strong>缓存前缀单元</strong>，避免长前缀因迟迟未达到结束位置而完全无法被缓存。</p>
+                    </li>
+                </ol>
+                <p>举例 1：用户第一轮请求内容为 <code>A + B</code>，第二轮请求内容为 <code>A + B + C</code>，则第二轮请求能完整匹配 <code>A + B</code>
+                    这个<strong>缓存前缀单元</strong>，可以命中 <code>A + B</code> 的缓存。详见下文例一。</p>
+                <p>举例 2：用户第一轮请求的内容为 <code>A + B</code>，第二轮请求的内容为 <code>A + C</code>，则第二轮请求无法命中缓存，因为 <code>A + C</code>
+                    不能完整匹配第一轮的<strong>缓存前缀单元</strong>（<code>A + B</code>）。但此时系统会识别到两轮请求存在公共前缀 <code>A</code>，并将
+                    <code>A</code> 作为<strong>缓存前缀单元</strong>落盘。当第三轮请求 <code>A + D</code> 到来时，能完整匹配 <code>A</code>
+                    这个<strong>缓存前缀单元</strong>，可以命中 <code>A</code> 的缓存。详见下文例二。</p>
+                <hr>
+                <h3>例一：多轮对话<a>​</a></h3>
+                <p><strong>第一次请求</strong></p>
+                <div>
+                    <div>
+                        <pre><code><span><span>messages: [</span><br></span><span><span>    {"role": "system", "content": "你是一位乐于助人的助手"},</span><br></span><span><span>    {"role": "user", "content": "中国的首都是哪里？"}</span><br></span><span><span>]</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p><strong>第二次请求</strong></p>
+                <div>
+                    <div>
+                        <pre><code><span><span>messages: [</span><br></span><span><span>    {"role": "system", "content": "你是一位乐于助人的助手"},</span><br></span><span><span>    {"role": "user", "content": "中国的首都是哪里？"},</span><br></span><span><span>    {"role": "assistant", "content": "中国的首都是北京。"},</span><br></span><span><span>    {"role": "user", "content": "美国的首都是哪里？"}</span><br></span><span><span>]</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>在上例中，第二次请求可以完整复用第一次请求的<strong>缓存前缀单元</strong>，这部分会计入“缓存命中”。</p>
+                <h3>例二：长文本问答<a>​</a></h3>
+                <p><strong>第一次请求</strong></p>
+                <div>
+                    <div>
+                        <pre><code><span><span>messages: [</span><br></span><span><span>    {"role": "system", "content": "你是一位资深的财报分析师..."}</span><br></span><span><span>    {"role": "user", "content": "&lt;财报内容&gt;\n\n请总结一下这份财报的关键信息。"}</span><br></span><span><span>]</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p><strong>第二次请求</strong></p>
+                <div>
+                    <div>
+                        <pre><code><span><span>messages: [</span><br></span><span><span>    {"role": "system", "content": "你是一位资深的财报分析师..."}</span><br></span><span><span>    {"role": "user", "content": "&lt;财报内容&gt;\n\n请分析一下这份财报的盈利情况。"}</span><br></span><span><span>]</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p><strong>第三次请求</strong></p>
+                <div>
+                    <div>
+                        <pre><code><span><span>messages: [</span><br></span><span><span>    {"role": "system", "content": "你是一位资深的财报分析师..."}</span><br></span><span><span>    {"role": "user", "content": "&lt;财报内容&gt;\n\n请分析一下公司收入与支出占比。"}</span><br></span><span><span>]</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>在上例中，前两次请求不会命中缓存。前两次请求完成后，系统会识别出 <code>system</code> 消息 + <code>user</code>
+                    消息中的&lt;财报内容&gt;为<strong>缓存前缀单元</strong>，并进行落盘。在第三次请求中，由于完整匹配了前面落盘的<strong>缓存前缀单元</strong>，则可命中缓存。
+                </p>
+                <hr>
+                <h2>查看缓存命中情况<a>​</a></h2>
+                <p>在 DeepSeek API 的返回中，我们在 <code>usage</code> 字段中增加了两个字段，来反映请求的缓存命中情况：</p>
+                <ol>
+                    <li>
+                        <p><code>prompt_cache_hit_tokens</code>：本次请求的输入中，缓存命中的 tokens 数</p>
+                    </li>
+                    <li>
+                        <p><code>prompt_cache_miss_tokens</code>：本次请求的输入中，缓存未命中的 tokens 数</p>
+                    </li>
+                </ol>
+                <h2>硬盘缓存与输出随机性<a>​</a></h2>
+                <p>硬盘缓存只匹配到用户输入的前缀部分，输出仍然是通过计算推理得到的，仍然受到 temperature 等参数的影响，从而引入随机性。其输出效果与不使用硬盘缓存相同。</p>
+                <h2>其它说明<a>​</a></h2>
+                <ol>
+                    <li>
+                        <p>缓存系统是“尽力而为”，不保证 100% 缓存命中</p>
+                    </li>
+                    <li>
+                        <p>缓存构建耗时为秒级。缓存不再使用后会自动被清空，时间一般为几个小时到几天</p>
+                    </li>
+                </ol>
+            </div>
+        </div>
+    </div>
+    <div></div>
+</article>

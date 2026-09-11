@@ -1,0 +1,38 @@
+# 密钥与本地配置：绝不提交
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+auth.json
+credentials.json
+
+# 运行期数据（真相之源/投影，不入版本控制）
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+logs/
+*.log
+
+# Go 构建产物
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage.out
+*.prof
+*.pprof
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# 注：运行时若把 Message Log / Fossil 工作副本落在项目内，
+# 请按实际路径补充忽略规则（例如 /.marl/、/supervisor.db）。

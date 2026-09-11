@@ -1,0 +1,60 @@
+<article>
+    <nav>
+        <ul>
+            <li><a><svg>
+                        <path></path>
+                    </svg></a></li>
+            <li><span>API 指南</span>
+                <meta>
+            </li>
+            <li><span>JSON Output</span>
+                <meta>
+            </li>
+        </ul>
+    </nav>
+    <div><button>本页总览</button></div>
+    <div>
+        <div>
+            <div>
+                <h1>JSON Output</h1>
+                <p>在很多场景下，用户需要让模型严格按照 JSON 格式来输出，以实现输出的结构化，便于后续逻辑进行解析。</p>
+                <p>DeepSeek 提供了 JSON Output 功能，来确保模型输出合法的 JSON 字符串。</p>
+                <h2>注意事项<a>​</a></h2>
+                <ol>
+                    <li>设置 <code>response_format</code> 参数为 <code>{'type': 'json_object'}</code>。</li>
+                    <li>用户传入的 system 或 user prompt 中必须含有 <code>json</code> 字样，并给出希望模型输出的 JSON 格式的样例，以指导模型来输出合法 JSON。
+                    </li>
+                    <li>需要合理设置 <code>max_tokens</code> 参数，防止 JSON 字符串被中途截断。</li>
+                    <li><strong>在使用 JSON Output 功能时，API 有概率会返回空的 content。我们正在积极优化该问题，您可以尝试修改 prompt 以缓解此类问题。</strong>
+                    </li>
+                </ol>
+                <h2>样例代码<a>​</a></h2>
+                <p>这里展示了使用 JSON Output 功能的完整 Python 代码：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>import</span><span> json</span><br></span><span><span></span><span>from</span><span> openai </span><span>import</span><span> OpenAI</span><br></span><span><span></span><br></span><span><span>client </span><span>=</span><span> OpenAI</span><span>(</span><span></span><br></span><span><span>    api_key</span><span>=</span><span>"&lt;your api key&gt;"</span><span>,</span><span></span><br></span><span><span>    base_url</span><span>=</span><span>"https://api.deepseek.com"</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><br></span><span><span>system_prompt </span><span>=</span><span> </span><span>"""</span><br></span><span><span>The user will provide some exam text. Please parse the "question" and "answer" and output them in JSON format. </span><br></span><span><span></span><br></span><span><span>EXAMPLE INPUT: </span><br></span><span><span>Which is the highest mountain in the world? Mount Everest.</span><br></span><span><span></span><br></span><span><span>EXAMPLE JSON OUTPUT:</span><br></span><span><span>{</span><br></span><span><span>    "question": "Which is the highest mountain in the world?",</span><br></span><span><span>    "answer": "Mount Everest"</span><br></span><span><span>}</span><br></span><span><span>"""</span><span></span><br></span><span><span></span><br></span><span><span>user_prompt </span><span>=</span><span> </span><span>"Which is the longest river in the world? The Nile River."</span><span></span><br></span><span><span></span><br></span><span><span>messages </span><span>=</span><span> </span><span>[</span><span>{</span><span>"role"</span><span>:</span><span> </span><span>"system"</span><span>,</span><span> </span><span>"content"</span><span>:</span><span> system_prompt</span><span>}</span><span>,</span><span></span><br></span><span><span>            </span><span>{</span><span>"role"</span><span>:</span><span> </span><span>"user"</span><span>,</span><span> </span><span>"content"</span><span>:</span><span> user_prompt</span><span>}</span><span>]</span><span></span><br></span><span><span></span><br></span><span><span>response </span><span>=</span><span> client</span><span>.</span><span>chat</span><span>.</span><span>completions</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>    model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>    messages</span><span>=</span><span>messages</span><span>,</span><span></span><br></span><span><span>    response_format</span><span>=</span><span>{</span><span></span><br></span><span><span>        </span><span>'type'</span><span>:</span><span> </span><span>'json_object'</span><span></span><br></span><span><span>    </span><span>}</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><br></span><span><span></span><span>print</span><span>(</span><span>json</span><span>.</span><span>loads</span><span>(</span><span>response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><span>.</span><span>content</span><span>)</span><span>)</span><br></span></code></pre>
+                        <div><button><svg>
+                                    <path></path>
+                                </svg></button><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+                <p>模型将会输出：</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>{</span><br></span><span><span>    "question": "Which is the longest river in the world?",</span><br></span><span><span>    "answer": "The Nile River"</span><br></span><span><span>}</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div></div>
+</article>

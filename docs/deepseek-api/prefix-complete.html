@@ -1,0 +1,44 @@
+<article>
+    <nav>
+        <ul>
+            <li><a><svg>
+                        <path></path>
+                    </svg></a></li>
+            <li><span>API 指南</span>
+                <meta>
+            </li>
+            <li><span>对话前缀续写（Beta）</span>
+                <meta>
+            </li>
+        </ul>
+    </nav>
+    <div><button>本页总览</button></div>
+    <div>
+        <div>
+            <div>
+                <h1>对话前缀续写（Beta）</h1>
+                <p>对话前缀续写沿用 <a>Chat Completion API</a>，用户提供 assistant 开头的消息，来让模型补全其余的消息。</p>
+                <h2>注意事项<a>​</a></h2>
+                <ol>
+                    <li>使用对话前缀续写时，用户需确保 <code>messages</code> 列表里最后一条消息的 <code>role</code> 为
+                        <code>assistant</code>，并设置最后一条消息的 <code>prefix</code> 参数为 <code>True</code>。</li>
+                    <li>用户需要设置 <code>base_url="https://api.deepseek.com/beta"</code> 来开启 Beta 功能。</li>
+                </ol>
+                <h2>样例代码<a>​</a></h2>
+                <p>下面给出了对话前缀续写的完整 Python 代码样例。在这个例子中，我们设置 <code>assistant</code> 开头的消息为 <code>"```python\n"</code>
+                    来强制模型输出 python 代码，并设置 <code>stop</code> 参数为 <code>['```']</code> 来避免模型的额外解释。</p>
+                <div>
+                    <div>
+                        <pre><code><span><span>from</span><span> openai </span><span>import</span><span> OpenAI</span><br></span><span><span></span><br></span><span><span>client </span><span>=</span><span> OpenAI</span><span>(</span><span></span><br></span><span><span>    api_key</span><span>=</span><span>"&lt;your api key&gt;"</span><span>,</span><span></span><br></span><span><span>    base_url</span><span>=</span><span>"https://api.deepseek.com/beta"</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><br></span><span><span>messages </span><span>=</span><span> </span><span>[</span><span></span><br></span><span><span>    </span><span>{</span><span>"role"</span><span>:</span><span> </span><span>"user"</span><span>,</span><span> </span><span>"content"</span><span>:</span><span> </span><span>"Please write quick sort code"</span><span>}</span><span>,</span><span></span><br></span><span><span>    </span><span>{</span><span>"role"</span><span>:</span><span> </span><span>"assistant"</span><span>,</span><span> </span><span>"content"</span><span>:</span><span> </span><span>"```python\n"</span><span>,</span><span> </span><span>"prefix"</span><span>:</span><span> </span><span>True</span><span>}</span><span></span><br></span><span><span></span><span>]</span><span></span><br></span><span><span>response </span><span>=</span><span> client</span><span>.</span><span>chat</span><span>.</span><span>completions</span><span>.</span><span>create</span><span>(</span><span></span><br></span><span><span>    model</span><span>=</span><span>"deepseek-flash"</span><span>,</span><span></span><br></span><span><span>    messages</span><span>=</span><span>messages</span><span>,</span><span></span><br></span><span><span>    stop</span><span>=</span><span>[</span><span>"```"</span><span>]</span><span>,</span><span></span><br></span><span><span></span><span>)</span><span></span><br></span><span><span></span><span>print</span><span>(</span><span>response</span><span>.</span><span>choices</span><span>[</span><span>0</span><span>]</span><span>.</span><span>message</span><span>.</span><span>content</span><span>)</span><br></span></code></pre>
+                        <div><button><span><svg>
+                                        <path></path>
+                                    </svg><svg>
+                                        <path></path>
+                                    </svg></span></button></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div></div>
+</article>
