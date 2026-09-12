@@ -1,6 +1,11 @@
 package types
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	"unicode/utf8"
+)
 
 // InternalRole 是内部语义角色（10+ 种，可扩展）。它们只在框架内部存在，
 // 编译成线路协议时被折叠为 4 种 WireRole（见 Part 3.4 的映射表）。
@@ -180,7 +185,19 @@ type LogEntry struct {
 // 失败：任一字段非法（错误须说明是哪个字段，便于定位构造点）。
 // 并发：纯函数，不改动接收者。
 func (e *LogEntry) Validate() error {
-	panic("TODO(phase 0): placeholder")
+	switch {
+	case e == nil:
+		return fmt.Errorf("entry is nil")
+	case !e.Role.Valid():
+		return fmt.Errorf("role %q invalid (zero value not allowed)", e.Role)
+	case !e.Prov.Valid():
+		return fmt.Errorf("provenance %q invalid", e.Prov)
+	case !e.Audience.Valid():
+		return fmt.Errorf("audience %q invalid", e.Audience)
+	case e.Prov != ProvOriginal && len(e.SourceIDs) == 0:
+		return fmt.Errorf("provenance %q requires SourceIDs", e.Prov)
+	}
+	return nil
 }
 
 // NewLogEntry 构造一条 LogEntry，并填充必填项的安全默认。
@@ -199,7 +216,20 @@ func (e *LogEntry) Validate() error {
 // [权衡: Audience 默认取 Both 而非 Context，是为了让"忘记设置"产生多余数据
 // 而不是丢失数据（丢失不可恢复，多余只是浪费 token）。]
 func NewLogEntry(agentID AgentID, role InternalRole, content string) *LogEntry {
-	panic("TODO(phase 0): placeholder")
+	if !role.Valid() {
+		panic(fmt.Sprintf("marl: NewLogEntry: invalid role %q", role))
+	}
+	if agentID == "" {
+		panic("marl: NewLogEntry: empty agentID")
+	}
+	return &LogEntry{
+		AgentID:  agentID,
+		Role:     role,
+		Content:  content,
+		Prov:     ProvOriginal,
+		Audience: AudienceBoth,
+		TokenEst: EstimateTokens(content),
+	}
 }
 
 // WithProvenance 设置血缘并返回自身，用于链式构造。
@@ -217,5 +247,34 @@ func NewLogEntry(agentID AgentID, role InternalRole, content string) *LogEntry {
 // 代价是 LogEntry 在构造期并非不可变——不可变性由"Append 之后不再修改"
 // 的约定与 store 层不提供 Update 接口共同保证，而非由类型系统保证。]
 func (e *LogEntry) WithProvenance(prov Provenance, srcs ...MessageID) *LogEntry {
-	panic("TODO(phase 0): placeholder")
+	if !prov.Valid() {
+		panic(fmt.Sprintf("marl: WithProvenance: invalid provenance %q", prov))
+	}
+	srcsCopy := make([]MessageID, len(srcs))
+	copy(srcsCopy, srcs)
+	e.Prov = prov
+	e.SourceIDs = srcsCopy
+	return e
+}
+
+// EstimateTokens 对一段 UTF-8 文本做本地 token 估算（每个构造点都会调用）。
+//
+// 依据：分词器对 ASCII 约 4 字符/token、对 CJK 约 1 token/字。估算值 =
+// (字节数 + 字符数)/2 —— 两个口径的算术中点：纯 ASCII 时约 bytes*0.625
+// （略偏高），纯中文时约 2 tokens/字（高估约一倍）。方向是刻意的安全侧：
+// 估算只用于 View 预算的提前量（headroom），宁高不低——高估的代价是多
+// 花一笔本地 CPU，低估的代价是上下文溢出。真实用量以 Outcome.Usage 为准
+// （Part 3.2 的口径分工：本地估算 ≠ 计费）。
+//
+// 并发：纯函数。
+func EstimateTokens(content string) int {
+	if content == "" {
+		return 0
+	}
+	runes := utf8.RuneCountInString(content)
+	tokens := (len(content) + runes) / 2
+	if tokens < 1 {
+		tokens = 1
+	}
+	return tokens
 }

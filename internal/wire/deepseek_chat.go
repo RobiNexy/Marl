@@ -428,10 +428,14 @@ type openAIChatRequestBody struct {
 // 直接 append 了含 "content": null 的响应消息）。省略该键在部分网关会被当成
 // 非法消息，而带上 null 两边都认。
 type openAIChatReqMessage struct {
-	Role       string              `json:"role"`
-	Content    *string             `json:"content"`
-	ToolCalls  []openAIChatReqCall `json:"tool_calls,omitempty"`
-	ToolCallID string              `json:"tool_call_id,omitempty"`
+	Role    string  `json:"role"`
+	Content *string `json:"content"`
+	// ReasoningContent 是历史思维链（ADR-0023：带 tools 的请求应回传）。
+	// 编码器只在 assistant 消息 + 请求携带 tools 时发出（厂商契约：
+	// 不带 tools 时传了也被忽略——不发，省字节）。
+	ReasoningContent string              `json:"reasoning_content,omitempty"`
+	ToolCalls        []openAIChatReqCall `json:"tool_calls,omitempty"`
+	ToolCallID       string              `json:"tool_call_id,omitempty"`
 }
 
 type openAIChatReqCall struct {
@@ -523,6 +527,16 @@ func EncodeOpenAIChatBody(req *WireRequest, remoteName, bucketField string) ([]b
 			return nil, err
 		}
 		msgs = append(msgs, enc)
+	}
+	// 历史思维链（ADR-0023 的通路）：assistant 消息上的 Reasoning 只在请求
+	// 携带 tools 时发出。放在编码层而不是 Normalizer 的原因：厂商契约说
+	// tools 的存在决定回传，而 encode 是唯一同时看得到消息与 tools 的点。
+	if len(req.Tools) > 0 {
+		for i := range msgs {
+			if msgs[i].Role == string(types.WireAssistant) && req.Messages[i].Reasoning != "" {
+				msgs[i].ReasoningContent = req.Messages[i].Reasoning
+			}
+		}
 	}
 
 	body := openAIChatRequestBody{
@@ -656,7 +670,7 @@ func encodeOpenAIChatMessage(m WireMessage, index int) (openAIChatReqMessage, er
 		return openAIChatReqMessage{}, fmt.Errorf("wire: encode: 第 %d 条 tool 消息缺少 tool_call_id；"+
 			"孤立的工具结果无法配对到任何调用，厂商侧等价于非法消息", index)
 	}
-	if m.Content == "" && len(m.ToolCalls) == 0 {
+	if m.Content == "" && len(m.ToolCalls) == 0 && m.Reasoning == "" {
 		return openAIChatReqMessage{}, fmt.Errorf("wire: encode: 第 %d 条消息既无 content 也无 tool_calls（空消息会占一个角色槽位）", index)
 	}
 
@@ -671,7 +685,7 @@ func encodeOpenAIChatMessage(m WireMessage, index int) (openAIChatReqMessage, er
 	// 占一个角色槽位却不携带信息）。所以"空结果"必须由调用方显式表达
 	// （例如 Content="（无输出）"），本函数不会替它编一个占位串。
 	switch {
-	case m.Role == types.WireAssistant && m.Content == "" && len(m.ToolCalls) > 0:
+	case m.Role == types.WireAssistant && m.Content == "" && (len(m.ToolCalls) > 0 || m.Reasoning != ""):
 		out.Content = nil
 	default:
 		content := m.Content

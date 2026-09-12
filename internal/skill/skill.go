@@ -3,6 +3,7 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"marl/internal/types"
 )
@@ -69,6 +70,20 @@ type SkillEnv struct {
 	// ControlPlaneRoot 是 ~/.local/state/marl/<project-id>/。
 	// 它不在任何 Agent 的 namespace 里（hidden），技能不得触碰。
 	ControlPlaneRoot string
+	// Snapshots 是 mutating 技能的"写前快照"通道（Part 8.4 / 4.4 file_write）。
+	//
+	// 接口定义在消费侧（本包）并收窄到 Create 一个方法——这是快照在技能层的
+	// 全部用途；Restore 属 restore_snapshot 技能（后续阶段），到时再收窄。
+	// nil = 无快照能力（阶段 2 的 mini 以外的环境可以没有），此时 file_write
+	// 对**已存在文件**的覆盖写跳过快照——不报错：快照是回滚 affordance，
+	// 不是写入的前置条件（有快照是增益，无快照时原子写仍是原子写）。
+	Snapshots Snapshotter
+}
+
+// Snapshotter 是 file_write"写前快照"的窄接口（消费侧收窄，Part 11.10pre）。
+// relPath 是经过 Resolver 校验的 workspace 相对路径；实现负责落盘与命名。
+type Snapshotter interface {
+	Create(ctx context.Context, relPath string, content []byte) (string, error)
 }
 
 // SkillResult 是技能统一返回值（Part 4.3 准则 6：JSON 可序列化、含 ok）。
@@ -86,8 +101,8 @@ type SkillEnv struct {
 // 原因"的结果最终会被呈现给模型，模型只能猜，而猜测会在后续轮次里被当作
 // 事实——这是幻觉最廉价的来源之一。
 type SkillResult struct {
-	OK        bool
-	ErrorType string         // 取值须来自本包错误码常量（见文件末尾）
+	OK        bool           `json:"ok"`
+	ErrorType string         `json:"error_type,omitempty"` // 取值须来自本包错误码常量（见文件末尾）
 	Message   string         // 人类可读说明（进日志与监控，不要求机器解析）
 	Data      map[string]any // 技能特有字段（如 file_read 的 content / symbols）
 }
@@ -97,7 +112,24 @@ type SkillResult struct {
 // 失败：OK 与 ErrorType 的组合违反互斥规则。
 // 并发：纯函数。
 func (r *SkillResult) Validate() error {
-	panic("TODO(phase 0): placeholder")
+	switch {
+	case !r.OK && r.ErrorType == "":
+		return fmt.Errorf("skill result failed but has no error_type")
+	case r.OK && r.ErrorType != "":
+		return fmt.Errorf("skill result ok but carries error_type %q", r.ErrorType)
+	}
+	return nil
+}
+
+// NewFailure 构造业务失败结果（工具确实跑了，结论是"不行"——Skill 契约
+// 注释里明确这是**正常返回值**，会序列化回填给模型，模型据此换方法）。
+func NewFailure(errorType, format string, args ...any) *SkillResult {
+	return &SkillResult{OK: false, ErrorType: errorType, Message: fmt.Sprintf(format, args...)}
+}
+
+// NewSuccess 构造成功结果。data 为技能特有字段（可 nil）。
+func NewSuccess(data map[string]any) *SkillResult {
+	return &SkillResult{OK: true, Data: data}
 }
 
 // Skill 是原子技能的契约（Part 4.3 通用准则）。

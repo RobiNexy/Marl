@@ -106,9 +106,13 @@ func StabilityRank(s types.Stability) (int, bool) {
 // 任何"顺手 trim/规范化空白"的行为都会改变缓存前缀字节，从而让缓存命中
 // 丢失（而且只在跨进程/跨协议时暴露）。
 type Segment struct {
-	Kind        SegmentKind
-	Speaker     Speaker
-	Content     string // 含 XML 标注，全协议逐字节保留
+	Kind    SegmentKind
+	Speaker Speaker
+	Content string // 含 XML 标注，全协议逐字节保留
+	// Reasoning 是历史思维链（ADR-0023：带 tools 的请求应回传）。
+	// 仅 SegTurn + SpeakerAssistant 允许携带（校验在 Normalizer），Content
+	// 可为空——"只思考、无可见回复"的历史助手消息。逐字节保留，不解析。
+	Reasoning   string
 	Attachments []types.Attachment
 	ToolCalls   []types.ToolCall // assistant 产出的调用
 	ToolCallID  string           // tool_result 的配对 id

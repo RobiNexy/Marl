@@ -22,8 +22,12 @@ import (
 //     反之（显式断点协议却没打断点）不报错，但缓存永不命中——Builder 侧
 //     必须按缓存模式主动打断点，这一点由 Normalizer 的测试守护。
 type WireMessage struct {
-	Role        types.WireRole
-	Content     string
+	Role    types.WireRole
+	Content string
+	// Reasoning 是历史思维链（ADR-0023 的通路：Segment → WireMessage → 编码器
+	// 的 reasoning_content 字段）。只在 assistant 消息上有意义；编码器仅在
+	// 请求携带 tools 时发出（厂商契约：不带 tools 时传了也被忽略，不发更省字节）。
+	Reasoning   string
 	Attachments []types.Attachment
 	ToolCalls   []types.ToolCall
 	ToolCallID  string // tool 消息与 tool_call 的配对
@@ -729,8 +733,11 @@ func layoutOpenAIChatMessages(segs []Segment, toolResultRole string) ([]WireMess
 			// 报错而不是降级：这是**框架未实现**，不是"模型没有能力"。
 			return nil, fmt.Errorf("wire: normalizer: 第 %d 个 Segment 带 %d 个附件；阶段 1 未实现附件翻译（10.14 落地于阶段 2）", i, len(s.Attachments))
 		}
-		if s.Content == "" && len(s.ToolCalls) == 0 {
-			return nil, fmt.Errorf("wire: normalizer: 第 %d 个 Segment（kind=%s）既无 Content 也无 ToolCalls：它不携带信息却会占一个角色槽位（编译器必须过滤空段或记降级）", i, s.Kind)
+		if s.Content == "" && len(s.ToolCalls) == 0 && s.Reasoning == "" {
+			return nil, fmt.Errorf("wire: normalizer: 第 %d 个 Segment（kind=%s）既无 Content 也无 ToolCalls/Reasoning：它不携带信息却会占一个角色槽位（编译器必须过滤空段或记降级）", i, s.Kind)
+		}
+		if s.Reasoning != "" && !(s.Kind == SegTurn && s.Speaker == SpeakerAssistant) {
+			return nil, fmt.Errorf("wire: normalizer: 第 %d 个 Segment（kind=%s speaker=%s）带了 Reasoning：历史思维链只能是 assistant 的回合产出（ADR-0023）", i, s.Kind, s.Speaker)
 		}
 
 		role := roleForSegment(s.Kind, s.Speaker)
@@ -743,6 +750,7 @@ func layoutOpenAIChatMessages(segs []Segment, toolResultRole string) ([]WireMess
 		msgs = append(msgs, WireMessage{
 			Role:       role,
 			Content:    s.Content,
+			Reasoning:  s.Reasoning,
 			ToolCalls:  cloneToolCalls(s.ToolCalls),
 			ToolCallID: s.ToolCallID,
 			// CacheControl 留空：OpenAI 兼容线路是隐式前缀缓存（CacheImplicitPrefix），

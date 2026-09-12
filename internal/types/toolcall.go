@@ -1,6 +1,9 @@
 package types
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // ToolCall 是 LLM 产出的一次工具调用（Part 10.3 / 10.16）。
 // 同名类型在 wire 的 Segment.ToolCalls / Outcome.ToolCalls 里复用。
@@ -49,5 +52,11 @@ type ToolResult struct {
 // 失败：违反 OK 与 ErrorType 的互斥规则。
 // 并发：纯函数。
 func (r ToolResult) Validate() error {
-	panic("TODO(phase 0): placeholder")
+	switch {
+	case !r.OK && r.ErrorType == "":
+		return fmt.Errorf("tool result failed but has no error_type (OK=false requires ErrorType)")
+	case r.OK && r.ErrorType != "":
+		return fmt.Errorf("tool result ok but carries error_type %q", r.ErrorType)
+	}
+	return nil
 }

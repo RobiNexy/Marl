@@ -606,3 +606,56 @@ func TestDeepSeekChatAdapterHealthCheck(t *testing.T) {
 		}
 	})
 }
+
+// TestEncodeReasoningPassthrough 守历史思维链的通路段（ADR-0023 的落地）：
+//
+//   - 带 tools：assistant 消息上的 Reasoning 编码进 reasoning_content；
+//   - 不带 tools：即便 Reasoning 非空也不携带（厂商契约：传了也被忽略，
+//     不发省字节——13.3 探测 §3.6 的实测裁决）。
+//
+// [阶段 2 补]：编码器缺这个通路时，"回传历史思维链"是静默失效的
+// （请求照发，字段从未出现，账面上看不出来）。
+func TestEncodeReasoningPassthrough(t *testing.T) {
+	base := encodeFixture()
+
+	t.Run("带 tools 时回传", func(t *testing.T) {
+		req := *base
+		req.Messages = []WireMessage{
+			{Role: types.WireUser, Content: "q"},
+			{Role: types.WireAssistant, Content: "", Reasoning: "<reasoning>先想想</reasoning>"},
+		}
+		req.Tools = []ToolDef{{Name: "t", Description: "d", Parameters: json.RawMessage(`{"type":"object"}`)}}
+		body, err := EncodeOpenAIChatBody(&req, "deepseek-flash", DefaultBucketField)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		m := decodeBody(t, body)
+		msgs := m["messages"].([]any)
+		assistant := msgs[1].(map[string]any)
+		if got, ok := assistant["reasoning_content"].(string); !ok || got != "<reasoning>先想想</reasoning>" {
+			t.Fatalf("reasoning_content: %v", assistant)
+		}
+		// content 为 null（JSON nil）是"没有文本"的编码形态；非 null 即错。
+		if assistant["content"] != nil {
+			t.Fatalf("reasoning-only assistant 的 content 应为 null，实发: %v", assistant["content"])
+		}
+	})
+
+	t.Run("不带 tools 时不携带", func(t *testing.T) {
+		req := *base
+		req.Messages = []WireMessage{
+			{Role: types.WireUser, Content: "q"},
+			{Role: types.WireAssistant, Content: "", Reasoning: "<reasoning>先想想</reasoning>"},
+		}
+		body, err := EncodeOpenAIChatBody(&req, "deepseek-flash", DefaultBucketField)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		m := decodeBody(t, body)
+		msgs := m["messages"].([]any)
+		assistant := msgs[1].(map[string]any)
+		if _, present := assistant["reasoning_content"]; present {
+			t.Fatalf("不带 tools 不应携带 reasoning_content: %v", assistant)
+		}
+	})
+}

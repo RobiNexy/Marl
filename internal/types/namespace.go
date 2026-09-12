@@ -1,5 +1,12 @@
 package types
 
+import (
+	"fmt"
+	"path"
+	"path/filepath"
+	"strings"
+)
+
 // PathMode 是命名空间挂载的三种模式（Part 5.2）。
 //
 // 语义是"Agent 视角的感知"，而非单纯权限位：
@@ -57,10 +64,22 @@ type Mount struct {
 
 // Valid 报告该挂载点是否可直接投入使用（零值返回错误原因）。
 //
-// 失败：Pattern 空、Mode 非法。
+// 失败：Pattern 空、Mode 非法。不检查 glob 语法（那是匹配器的职责，
+// 见 Resolver 实现；两层校验的语素同属 fail-closed 防线，错误先于
+// 匹配发生能让配置错误在启动期就炸）。
 // 并发：纯函数。
 func (m Mount) Valid() error {
-	panic("TODO(phase 0): placeholder")
+	switch {
+	case m.Pattern == "":
+		return fmt.Errorf("mount: empty pattern")
+	case strings.Contains(m.Pattern, ".."):
+		return fmt.Errorf("mount: pattern %q contains '..' (escaping glob is illegal)", m.Pattern)
+	case path.IsAbs(m.Pattern) || filepath.IsAbs(m.Pattern):
+		return fmt.Errorf("mount: pattern %q is absolute (patterns are relative to project root)", m.Pattern)
+	case !m.Mode.Valid():
+		return fmt.Errorf("mount: mode %q invalid (zero value not allowed)", m.Mode)
+	}
+	return nil
 }
 
 // Namespace 是一个 Agent 的命名空间（由挂载点组成，无黑名单）。

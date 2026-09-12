@@ -2,7 +2,6 @@ package skill
 
 import (
 	"context"
-
 	"marl/internal/types"
 )
 
@@ -44,17 +43,16 @@ type Registry interface {
 }
 
 // Allowed 判断技能是否在 Profile 的许可列表内（Part 6.11 语义）。
-// 空列表 = 全部允许；有内容 = 白名单（不支持黑名单语法）。
-//
-// 职责边界：本函数只做**集合成员判断**，不检查技能是否已注册，也不产生
-// 错误信息。授权语义的完整实现（含错误码）在 Authorizer。
-// 这样切分是为了让"授权"与"技能存在性"两个概念不互相纠缠——把后者混进
-// 前者，会让"新增技能后忘了更新白名单"变成一个难以定位的授权谜题。
-//
-// 零值语义：allowedSkills 为空（含 nil）返回 true，与
-// types.Profile.AllowedSkills 的零值契约一致（空 = 不限制）。
 func Allowed(allowedSkills []string, name string) bool {
-	panic("TODO(phase 0): placeholder")
+	if len(allowedSkills) == 0 {
+		return true
+	}
+	for _, a := range allowedSkills {
+		if a == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Authorizer 把"调用时校验"集中到一处：技能许可 + 命名空间 + 深度。

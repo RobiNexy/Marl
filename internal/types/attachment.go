@@ -1,5 +1,7 @@
 package types
 
+import "fmt"
+
 // AttachmentKind 是附件种类（Part 10.14）。
 // v1 只完整支持 AttachImage；AttachPDF / AttachFile 进枚举但 v1 不实现。
 //
@@ -93,5 +95,19 @@ type Attachment struct {
 //
 // 并发：纯函数。
 func (a Attachment) Validate() error {
-	panic("TODO(phase 0): placeholder")
+	switch {
+	case !a.Kind.Valid():
+		return fmt.Errorf("attachment kind %q invalid", a.Kind)
+	case !a.Kind.Supported():
+		return fmt.Errorf("attachment kind %q not yet implemented in v1", a.Kind)
+	case !a.Source.Valid():
+		return fmt.Errorf("attachment source %q invalid", a.Source)
+	case a.MimeType == "":
+		return fmt.Errorf("attachment mime_type is required")
+	case a.Kind != AttachImage && a.Detail != "":
+		return fmt.Errorf("attachment kind %q must not carry detail", a.Kind)
+	case len(a.Data) == 0:
+		return fmt.Errorf("attachment data is empty")
+	}
+	return nil
 }

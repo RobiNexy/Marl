@@ -548,3 +548,23 @@ func TestNormalizerBuildRejects(t *testing.T) {
 		}
 	})
 }
+
+// TestLayoutReasoningSegment 守 Reasoning 段的布局规则（阶段 2 补通路）：
+// assistant 历史思维链逐字节复制进 WireMessage，且允许 Content 为空
+// （空段校验放宽到"Content=="" 且 Reasoning!="" 合法"——只思考的助手轮）。
+func TestLayoutReasoningSegment(t *testing.T) {
+	segs := []Segment{
+		{Kind: SegTurn, Speaker: SpeakerHuman, Content: "q", Stability: types.StabilityStable},
+		{Kind: SegTurn, Speaker: SpeakerAssistant, Content: "", Reasoning: "<reasoning>x</reasoning>", Stability: types.StabilityStable},
+	}
+	msgs, err := layoutOpenAIChatMessages(segs, ToolResultNativeRole)
+	if err != nil {
+		t.Fatalf("layout: %v", err)
+	}
+	if len(msgs) != 2 || msgs[1].Reasoning != "<reasoning>x</reasoning>" {
+		t.Fatalf("reasoning not carried: %+v", msgs)
+	}
+	if !(msgs[1].Content == "") {
+		t.Fatalf("content should stay empty: %+v", msgs[1])
+	}
+}

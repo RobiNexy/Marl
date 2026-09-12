@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // WireRole 是线路协议的四种角色。LLM API 只认这 4 种；10+ 内部角色在编译阶段
 // 按映射表折叠进来（Part 3.3 / 3.4）。
@@ -133,5 +136,49 @@ type ContextView struct {
 // [权衡: 校验放在 View 侧而非 Compile 侧，是为了让"编排层产出了非法视图"
 // 与"编译器有 bug"两类失败可区分——前者错在编排，后者错在编译。]
 func (v *ContextView) Validate() error {
-	panic("TODO(phase 0): placeholder")
+	if v == nil {
+		return fmt.Errorf("view is nil")
+	}
+	if v.AgentID == "" {
+		return fmt.Errorf("view agent_id is empty")
+	}
+	prevRank := -1 // -1 = 尚无条目；合法的非零起点只是守门，不承担排序义务
+	for i := range v.Items {
+		it := &v.Items[i]
+		switch {
+		case it.Ref == "":
+			return fmt.Errorf("item[%d]: empty ref", i)
+		case !it.WireRole.Valid():
+			return fmt.Errorf("item[%d] ref=%s: invalid wire_role %q", i, it.Ref, it.WireRole)
+		case !it.Stability.Valid():
+			return fmt.Errorf("item[%d] ref=%s: invalid stability %q", i, it.Ref, it.Stability)
+		}
+		rank, ok := stabilityRankBrief(it.Stability)
+		if !ok {
+			return fmt.Errorf("item[%d] ref=%s: stability %q unrankable", i, it.Ref, it.Stability)
+		}
+		if prevRank >= 0 && rank < prevRank {
+			return fmt.Errorf("item[%d] ref=%s: stability %q out of order (volatile must stay in tail, frozen→stable→volatile)", i, it.Ref, it.Stability)
+		}
+		prevRank = rank
+	}
+	return nil
+}
+
+// stabilityRankBrief 是 StabilityRank 的最小内部排序器（frozen=0 < stable=1 <
+// volatile=2）。与 wire 包的 StabilityRank 语义一致但独立实现，原因：types 包
+// 不依赖 wire（它是最底层契约包，见 doc.go），而排序规则是 View 校验的需要。
+// 两侧漂移的防线是 stage 2 的 agent 化测试；若规则变更须同步两处（ADR 记录）。
+//
+// 并发：纯函数。
+func stabilityRankBrief(s Stability) (int, bool) {
+	switch s {
+	case StabilityFrozen:
+		return 0, true
+	case StabilityStable:
+		return 1, true
+	case StabilityVolatile:
+		return 2, true
+	}
+	return -1, false
 }
