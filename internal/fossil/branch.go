@@ -63,3 +63,12 @@ func validateBranchName(name string) error {
 	}
 	return nil
 }
+
+// Cat 在 checkout 里读一份文件（vendor 的 pull 面；相对路径）。
+func (c *CLI) Cat(ctx context.Context, workdir, relPath string) ([]byte, error) {
+	res, err := c.runRead(ctx, workdir, "cat", relPath)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(res.stdout), nil
+}

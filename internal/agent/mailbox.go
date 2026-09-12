@@ -77,12 +77,83 @@ func (a *Agent) handleEnvelope(env proto.Envelope) {
 			return
 		}
 		a.recordChildReport(report)
+	case proto.MsgEscalation:
+		// 父路径（Part 11.3 流程 4）：登记一条 escalation 条目进 Log/View
+		//（父的下一轮编排可见），并以框架 ACK 回复发起者——[阶段边界]
+		// "父读取并答复"的完整形态由父的编排推进（escalate 包头的记录）。
+		req, ok := env.Payload.(*proto.EscalationRequest)
+		if !ok || req == nil {
+			a.auditf(context.Background(), "mailbox_error", env.Type.String(), map[string]any{
+				"error": "escalation payload mismatch", "from": string(env.From),
+			})
+			return
+		}
+		a.handleEscalationFromBelow(context.Background(), req)
+	case proto.MsgEscalationReply:
+		reply, ok := env.Payload.(*proto.EscalationReply)
+		if !ok {
+			a.auditf(context.Background(), "mailbox_error", env.Type.String(), map[string]any{
+				"error": "escalation reply payload mismatch", "from": string(env.From),
+			})
+			return
+		}
+		if a.escCfg != nil && a.escCfg.Manager != nil {
+			a.escCfg.Manager.DeliverReply(reply)
+		}
 	default:
 		a.auditf(context.Background(), "mailbox_unhandled", env.Type.String(), map[string]any{
 			"from": string(env.From),
 		})
 	}
 }
+
+// handleEscalationFromBelow 是父对 MsgEscalation 的框架级处理（Part 11.3
+// 流程 4）：
+//
+//   - 登记一条 RoleEscalation 条目（父的下一轮编排与审计都看得到）；
+//   - 框架自动 ACK（EscalationReply 的 IsHuman=false、From=本 Agent），
+//     发起者的 waiting 因此解除而不至于永久阻塞——[阶段边界] 的完整讨论
+//     见 internal/escalate 包头注。
+func (a *Agent) handleEscalationFromBelow(ctx context.Context, req *proto.EscalationRequest) {
+	a.mu.Lock()
+	a.childEscalations = append(a.childEscalations, req)
+	a.mu.Unlock()
+	e := types.NewLogEntry(a.id, types.RoleEscalation,
+		fmt.Sprintf("子 %s escalate: %s（question: %s）", req.From, req.Reason, req.Question))
+	e.Meta = map[string]any{"escalation_id": string(req.TraceID)}
+	if _, err := a.log.Append(ctx, e); err != nil {
+		a.auditf(ctx, "mailbox_error", "escalation_log", map[string]any{"error": err.Error()})
+		return
+	}
+	a.addToView(RoleForLogRole(e.Role), e.ID)
+	a.auditf(ctx, "escalation_ack", string(req.TraceID), map[string]any{
+		"from": string(req.From),
+	})
+	// ACK（IsHuman=false；发起者的 awaitEscalation 由此解除）。SendTo 经
+	// Spawner 的消息路由（架构上投递是框架的能力——Agent 不能直达别的
+	// Agent 的信箱，原则 4 层面发信的通道只有 Spawner）。
+	if a.spawner == nil {
+		a.auditf(ctx, "mailbox_error", "escalation_ack", map[string]any{
+			"error": "no spawner configured (ack undeliverable)",
+		})
+		return
+	}
+	env := proto.Envelope{
+		From:    a.id,
+		To:      req.From,
+		Type:    proto.MsgEscalationReply,
+		Payload: &proto.EscalationReply{From: a.id, IsHuman: false, Content: ACKText, TraceID: req.TraceID},
+		TraceID: req.TraceID,
+	}
+	if err := a.spawner.SendTo(req.From, env); err != nil {
+		a.auditf(ctx, "mailbox_error", "escalation_ack", map[string]any{
+			"error": err.Error(),
+		})
+	}
+}
+
+// ACKText 是父对 escalate 的框架回复文本（审计/上下文里可读）。
+const ACKText = "父 Agent 已收到你的求助；后续动作尚未执行。"
 
 // recordChildReport 记录一份子 report（pump goroutine 调用；只碰内存）。
 //

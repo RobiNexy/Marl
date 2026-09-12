@@ -62,6 +62,11 @@ const (
 	// WireOpenAIChat 是 OpenAI 兼容的 chat/completions 协议
 	// （Deepseek 走这条）。阶段 1 唯一实现的线路。
 	WireOpenAIChat WireID = "openai_chat"
+
+	//WireAnthropicMessages 是 Anthropic 的 messages 协议（阶段 10 落地；
+	// 差异面见 internal/wire 的 anthropic.go 头注：顶层 system、
+	// tool_result 以 user 块回传、assistant 的 tool_use/thinking 块）。
+	WireAnthropicMessages WireID = "anthropic_messages"
 )
 
 // Valid 报告 w 是否为已实现的线路协议。零值返回 false。
@@ -73,7 +78,7 @@ const (
 // 并发：纯函数。
 func (w WireID) Valid() bool {
 	switch w {
-	case WireOpenAIChat:
+	case WireOpenAIChat, WireAnthropicMessages:
 		return true
 	}
 	return false

@@ -32,6 +32,13 @@ import (
 type DiscussionConfig struct {
 	// Manager 是讨论生命周期关口（internal/discuss.Manager；测试用假实现）。
 	Manager DiscussionManager
+	// AutoDiscuss 是"写前自动转讨论"的 glob 清单（Part 11.2 入口 3，13.12
+	// 的"自动审批规则"；典型清单：contracts / preferences / decisions）。
+	// 匹配用 types.PatternCovers（与命名空间挂载同一 glob 方言）。
+	// file_write / file_edit 的目标路径命中即"先把写转为讨论"——目标路径
+	// 里的改动走讨论分支（结论落地），这个 Agent 的下一轮会看到结论落地
+	// 的条目（Part 12.5 的"先定契约再写代码"自动形态）。
+	AutoDiscuss []string
 }
 
 // DiscussionManager 是 Agent 对 discuss.Manager 的窄接口（消费侧定义）。
@@ -49,6 +56,22 @@ type DiscussionManager interface {
 // errDiscussing 是 eventLoop 的内部哨兵：讨论进行中，主循环需要进入
 // Blocked(Discussing) 等人类（Run 捕获 errors.Is，不外泄）。
 var errDiscussing = errors.New("agent: discussion in progress")
+
+// needsAutoDiscuss 检查一次写参数是否命中自动转讨论的清单（Part 12.2 的
+// 契约面：contracts/preferences/decisions 只能走讨论流程——Agent 想直接
+// 会被"能力约束替代惩罚"（写不出去，也不给"写坏了"的错误信号，而是
+// 讨论已开）。
+func (a *Agent) needsAutoDiscuss(path string) bool {
+	if a.discussCfg == nil || a.discussCfg.Manager == nil {
+		return false
+	}
+	for _, g := range a.discussCfg.AutoDiscuss {
+		if types.PatternCovers(g, path) {
+			return true
+		}
+	}
+	return false
+}
 
 // discussArgs 是 request_discussion 的参数形态。
 type discussArgs struct {
@@ -191,4 +214,45 @@ func shortRef(s string) string {
 		return s[:12]
 	}
 	return s
+}
+
+// autoDiscussTurn 是"写路径命中 auto_discuss"的折算面：开一次讨论、
+// 被折算成一次成功（讨论已开）的回填——模型被告知"写入需要先过讨论"。
+//
+// [推理边界] 本折算并不真正执行"讨论由模型 request_discussion 调用"——
+// 自动讨论由框架直接开讨论（写入的内容被当作草稿主题），结果上 model 的
+// 下轮看到讨论机制运作中的条目；approval 落地由讨论闭环承担。
+func (a *Agent) autoDiscussTurn(ctx context.Context, path string) *skill.SkillResult {
+	if a.discussSess != nil {
+		return skill.NewFailure("DISCUSS_IN_PROGRESS", "已在一次讨论中；请等待当前讨论的批注或裁决再操作 %s", path)
+	}
+	if _, err := a.intentDiscussionWithTopic(ctx, "自动：写 "+path, path); err != nil {
+		return skill.NewFailure("DISCUSS_OPEN_FAILED", "自动讨论开启失败：%v（写入未执行）", err)
+	}
+	return skill.NewSuccess(map[string]any{
+		"message": fmt.Sprintf("目标 %s 属受审而走写的路径；讨论已开启（草稿为本次写入的内容），人类审阅后落地。", path),
+	})
+}
+
+// intentDiscussionWithTopic 是 intentDiscussion 的（带定制主题/草稿）变体
+// （自动讨论从框架侧发起。与 LLM 的入口共享 Open → Pending 的机制路径——
+// 两种触发形态在 Manager.Open 处汇合）。
+func (a *Agent) intentDiscussionWithTopic(ctx context.Context, topic, draft string) (*skill.SkillResult, error) {
+	if a.discussCfg == nil || a.discussCfg.Manager == nil {
+		return skill.NewFailure(ErrIntentNotHandled, "讨论机制未装配"), nil
+	}
+	sess, err := a.discussCfg.Manager.Open(ctx, discuss.OpenRequest{
+		AgentID: a.id, Topic: topic, Draft: "目标路径：" + topic + "\n\n" + draft,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("intend auto discussion: %w", err)
+	}
+	a.mu.Lock()
+	a.discussSess = sess
+	a.discussPending = true
+	a.mu.Unlock()
+	a.auditf(ctx, "discussion_auto", sess.ID, map[string]any{
+		"agent_id": string(a.id), "topic": topic, "target": draft,
+	})
+	return skill.NewSuccess(map[string]any{"status": "discussing"}), nil
 }

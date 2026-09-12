@@ -1,6 +1,10 @@
 package proto
 
-import "marl/internal/types"
+import (
+	"fmt"
+
+	"marl/internal/types"
+)
 
 // EscalationRequest 是"沿上报链冒泡的求助消息"（Part 11.3）。
 // 与讨论的区别：目标是上级 Agent 或人类，产物是一段回复消息（进 Log），
@@ -60,5 +64,11 @@ type EscalationRule struct {
 // 不影响"是否存在出口"。
 // 并发：纯函数。
 func (r EscalationRule) Validate() error {
-	panic("TODO(phase 0): placeholder")
+	if r.FallbackHuman {
+		return nil
+	}
+	if r.ParentID == "" {
+		return fmt.Errorf("escalation rule: no outlet (empty ParentID and FallbackHuman=false -- a hanging escalation is the worst failure mode)")
+	}
+	return nil
 }

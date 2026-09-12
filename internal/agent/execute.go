@@ -71,6 +71,13 @@ func (a *Agent) eventLoop(ctx context.Context) error {
 		if a.hasPendingChildren() {
 			return errWaitChildren
 		}
+		// Escalation 进行中 → 阻塞等回复（Part 8.2 的 Blocked(Escalating)）。
+		a.mu.Lock()
+		esc := a.escPending != nil
+		a.mu.Unlock()
+		if esc {
+			return errEscalating
+		}
 		// 讨论进行中 → 阻塞等人类（Part 8.2 的 Blocked(Discussing)）。
 		// 位置在工具执行与"turn 结束"判定之后：annotation 恢复后的响应轮
 		// 可先跑完（含可能的草稿修订与子 report），随后再回到等待。
@@ -235,6 +242,21 @@ func (a *Agent) executeToolCall(ctx context.Context, call types.ToolCall) error 
 	s, err := a.skills.Get(call.Name)
 	if err != nil {
 		return a.appendToolEntry(ctx, call, skill.NewFailure("UNKNOWN_SKILL", "%v", err))
+	}
+	// 2.5 自动转讨论（Part 11.2 入口 3）：写路径命中 auto_discuss 清单的
+	// file_write / file_edit 被折为一次讨论（先审后写——Part 12.2 的写
+	// 权限表" preferences/ 只有人类能写"的自动形态）。折算对 LLM 的呈现
+	// 是一次"先把方案提交讨论"的失败回填 + 讨论 session 由 intent
+	// request_discussion 承接（模型下一轮会看到讨论提示 & -> 调用）。
+	if call.Name == "file_write" || call.Name == "file_edit" {
+		var probe map[string]any
+		if len(call.Arguments) > 0 {
+			_ = json.Unmarshal(call.Arguments, &probe)
+		}
+		if p, _ := probe["path"].(string); p != "" && a.needsAutoDiscuss(p) && a.discussSess == nil {
+			res := a.autoDiscussTurn(ctx, p)
+			return a.appendToolEntry(ctx, call, res)
+		}
 	}
 	// 3. 参数（Denormalizer 已校验合法性；此处解析成 map，不解释语义）。
 	var args map[string]any

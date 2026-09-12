@@ -66,6 +66,10 @@ type WireRequest struct {
 	// 而且症状（偶发的不相干回答）极难归因。命名类型让"从别处拿了个
 	// 字符串塞进来"在编译期就被挡住。
 	CacheBucket types.AgentID
+	// System 是 Anthropic 线路的顶层 system（frozen 前缀折到这里；OpenAI
+	// 兼容线路 role=system 消息的语义等价物）。空 = 未使用（Anthropic 的
+	// Normalizer 在 Assert 侧判空——本框架的 frozen 前缀是语义的一部分）。
+	System string
 	// ResponseFormat 是协议形态的输出格式声明（阶段 1 补，见 ADR-0017）。
 	// 取值来自 OutputFormat* 常量；空串 = 不发送（厂商默认文本输出）。
 	//

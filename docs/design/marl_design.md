@@ -4043,7 +4043,7 @@ L0 达标判据、哨兵、配对不变量、账本落点）见 ADR-0026。要�
 | 7 | 常驻块注入 | CanonicalRequest 含 standing_orders（✅ 已通过：compileView 段序 system→standing→私有段→历史，-race 全绿；lint 超限退出 1） |
 | 8 | 讨论闭环 | verdict @approve → 结论落地（✅ 已通过：discuss_loop全流程回放，author=agent 的草稿双版 + author=human 的 Finalize commit） |
 | 9 | 三层拓扑 | status 显示 6 节点树（✅ 已通过：topo_test 三层 2×2 收敛 + spawn_batch 部分拒绝回填 + Watchdog 终止悬停子代报 failed + status 色块/时长） |
-| 10 | 全功能 | 所有"不做"清单清零 |
+| 10 | 全功能 | 所有"不做"清单清零（✅ 已通过：Anthropic 线路（httptest 端到端）/ models probe 真机 PASS / 熔断+深度优先 Pool / escalate 双通道 / auto_discuss / reconfigure 三校验 / vendor+promote 真机 roundtrip / marl log+attach+conversation 导出 / golden（意图表序 + frozen 前缀）/ 审计全意图覆盖） |
 
 每个阶段都是"能跑的状态"，不是"半成品"。这让 coding agent 能持续验证、持续推进，而不是写到一半发现跑不起来。
 

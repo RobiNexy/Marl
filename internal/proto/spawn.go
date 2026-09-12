@@ -123,6 +123,14 @@ func (c SpawnErrorCode) Valid() bool {
 // "你的请求不合规"——这两者对 LLM 的后续行为指引完全相反。
 type Spawner interface {
 	Adjudicate(ctx context.Context, req *SpawnRequest) (*SpawnDecision, error)
+
+	// SendTo 是框架级的任意投递（Part 8.1 的内核：消息路由 + 生命周期）。
+	//
+	// 用面：escalation 的框架 ACK（父 → 子的 MsgEscalationReply 等不进
+	// "report"信封语义的封装交接——From 由调用方填，但必须与进程表里的
+	// 身份一致（原则 4 的 From 纪律在这里仍成立：投递者是框架，Agent 无
+	// 法在子信箱里伪造别人（id 是决策面））。
+	SendTo(id types.AgentID, env Envelope) error
 }
 
 // BatchPreflight 是 spawn_batch 的整体资源预检（Part 9.1：避免"批准 3 个

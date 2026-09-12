@@ -102,7 +102,16 @@ func (a *Agent) executeIntent(ctx context.Context, call types.ToolCall) (*skill.
 		return a.intentReport(ctx, call)
 	case proto.ToolRequestDiscussion:
 		return a.intentDiscussion(ctx, call)
+	case proto.ToolRequestHuman:
+		return a.intentRequestHuman(ctx, call)
+	case proto.ToolRequestReconfigure:
+		return a.intentRequestReconfigure(ctx, call)
 	default:
+		// 审计完整性（Part 4.1"一切结构性变更集中审计"的意图面：**所有**
+		// 意图裁决都有审计痕迹——包括"未被裁决关口处理"的如实拒绝）。
+		a.auditf(ctx, "intent_not_handled", call.Name, map[string]any{
+			"agent_id": string(a.id),
+		})
 		return skill.NewFailure(ErrIntentNotHandled,
 			"意图 %s 在当前阶段不可用（框架未实现该裁决关口）", call.Name), nil
 	}

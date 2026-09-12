@@ -28,10 +28,16 @@ func main() {
 		err = cmdInit(args)
 	case "knowledge":
 		err = cmdKnowledge(args)
+	case "models":
+		err = cmdModels(args)
 	case "status":
 		err = cmdStatus(args)
+	case "log":
+		err = cmdLog(args)
+	case "attach":
+		err = cmdAttach(args)
 	default:
-		err = fmt.Errorf("unknown command %q (want: init | knowledge | status)", cmd)
+		err = fmt.Errorf("unknown command %q (want: init | knowledge | status | log | attach)", cmd)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "marl %s: %v\n", cmd, err)

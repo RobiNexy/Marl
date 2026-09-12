@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"errors"
 	"time"
 
 	"marl/internal/types"
@@ -40,7 +41,17 @@ type ReconfigureRequest struct {
 // 失败：Sampling/Task/Thinking 全为 nil；Reason 为空。
 // 并发：纯函数。
 func (r ReconfigureRequest) Validate() error {
-	panic("TODO(phase 0): placeholder")
+	switch {
+	case r.Reason == "":
+		return errors.New("reconfigure: Reason is required (silently adjusting parameters is not allowed)")
+	case r.Sampling == nil && r.Task == nil && r.Thinking == nil:
+		return errors.New("reconfigure: at least one field must be replaced (empty request pollutes the audit trail)")
+	}
+	// 可改字段校验（Part 6.9 的 Reconfigure 边界）：本结构只带三个可改块，
+	// 因此没有"不可改字段"需要拒绝——不可改（Prompt/AllowedSkills 等）压根
+	// 不进本结构：门面即边界。若未来有调用方塞进不可改字段，本结构自然缺
+	// 对应字段（编译期防线），运行期无需重复判定。
+	return nil
 }
 
 // BranchRequest 是开 Fossil 分支的意图（Part 8.4 / 11.2）。

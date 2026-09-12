@@ -135,6 +135,10 @@ type Config struct {
 	// Discussion 非 nil 即启用（装配缺失时 request_discussion 回填
 	// INTENT_NOT_HANDLED——如实拒绝而不是装死）。
 	Discussion *DiscussionConfig
+
+	// ---- 阶段 10：escalation ----
+	// Escalation 非 nil 即启用（request_human 的裁决关口）。
+	Escalation *EscalationConfig
 }
 
 // Agent 是一个单任务的执行体（Part 8.1，阶段 2 无 Mailbox/父子拓扑）。
@@ -192,6 +196,10 @@ type Agent struct {
 	discussSess    *discuss.Session
 	discussPending bool
 
+	// 阶段 10：escalation（pending 由 intent 写、await 消费）。
+	escCfg     *EscalationConfig
+	escPending *pendingEscalation
+
 	// 阶段 5：拓扑与消息。
 	parentID      types.AgentID
 	maxDepth      int
@@ -210,6 +218,8 @@ type Agent struct {
 	waitStrategy  WaitStrategy
 	waitN         int
 	reportArrival chan struct{}
+	// 阶段 10：escalation（pending 由 intent 写、await 消费）。
+	childEscalations []*proto.EscalationRequest
 	// 本 Agent 的任务终态信号（子：report 已投递）。
 	reported bool
 	// 成功写入的文件（机械检查的数据源；file_write 成功时记录）。
@@ -309,6 +319,7 @@ func New(cfg Config) (*Agent, error) {
 		standingOrders:   cfg.StandingOrders,
 		taskDesc:         cfg.TaskDescription,
 		discussCfg:       cfg.Discussion,
+		escCfg:           cfg.Escalation,
 		pendingChildren:  map[types.AgentID]bool{},
 		childrenStatus:   map[types.AgentID]types.ChildStatus{},
 		reportsDone:      make(chan struct{}, 1),
@@ -446,6 +457,15 @@ func (a *Agent) Run(ctx context.Context) error {
 				break
 			}
 			continue // 子结果已落 Log+View，下一轮编排自然看到
+		}
+		if errors.Is(err, errEscalating) {
+			// Blocked(Escalating)（Part 11.7 ③：等待不烧钱）。回复到达后
+			// 注入 Log，继续 loop（LLM 下一轮自然看到）。
+			if werr := a.awaitEscalation(ctx); werr != nil {
+				err = werr
+				break
+			}
+			continue
 		}
 		if errors.Is(err, errDiscussing) {
 			// Blocked(Discussing)（Part 8.2 的讨论等待；等待期间不烧钱——

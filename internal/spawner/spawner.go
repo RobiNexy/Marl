@@ -423,6 +423,30 @@ func (s *Spawner) fetchInjected(ctx context.Context, req *proto.SpawnRequest) ([
 	return out, nil
 }
 
+// SendTo 实现 proto.Spawner.SendTo：框架级消息投递（父侧
+// escalation 的 ACK 之类）。
+//
+// 目标不存在 → 错误（信件无处可去必须可见）；信箱满 → 5 秒等待与
+// deliverReportLocked 的同一形态（写给 pump 的 ACK 被背压卡住 5s 时丢弃，
+// 审计里可见）。
+func (s *Spawner) SendTo(id types.AgentID, env proto.Envelope) error {
+	if env.To == "" {
+		env.To = id
+	}
+	s.mu.Lock()
+	proc := s.procs[id]
+	s.mu.Unlock()
+	if proc == nil {
+		return fmt.Errorf("spawner: %s not in process table (send to)", id)
+	}
+	select {
+	case proc.Mailbox <- env:
+		return nil
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("spawner: mailbox of %s full (SendTo dropped after timeout)", id)
+	}
+}
+
 // SetFactory 注入 ChildFactory（装配期的后置注入：工厂需要引用本 Spawner
 // 作为子的 ReportSink，存在构造顺序依赖）。仅允许在首次 Adjudicate 前
 // 设置一次——运行中更换工厂会让进程表里的子来自不同代工厂，行为不可归因。

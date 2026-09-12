@@ -20,13 +20,17 @@ import (
 
 func cmdKnowledge(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: marl knowledge lint")
+		return fmt.Errorf("usage: marl knowledge lint | pull | promote")
 	}
 	switch args[0] {
 	case "lint":
 		return cmdKnowledgeLint(args[1:])
+	case "pull":
+		return runKnowledgePull(args[1:])
+	case "promote":
+		return runKnowledgePromote(args[1:])
 	default:
-		return fmt.Errorf("unknown knowledge subcommand %q (want: lint)", args[0])
+		return fmt.Errorf("unknown knowledge subcommand %q (want: lint | pull | promote)", args[0])
 	}
 }
 

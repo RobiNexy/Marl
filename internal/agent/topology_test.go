@@ -318,7 +318,6 @@ func TestWatchdogKillsStalledChild(t *testing.T) {
 	}
 	ff.slow = true
 
-
 	parent.llm = &scriptedParent{turns: []*wire.WireTurn{
 		toolCallTurn(spawnCall("coder", "慢任务", []string{"src/auth/**"}, nil)),
 	}, final: replyTurn(" Watchdog 终止了不省心的子。")}
