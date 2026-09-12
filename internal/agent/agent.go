@@ -75,6 +75,14 @@ type Config struct {
 	// Thinking 进 CanonicalRequest.Thinking（10.7 落地缺口 1 的修复点：
 	// Normalizer 只读 req.Thinking，档位必须由编译侧显式带上）。
 	Thinking types.ThinkingSpec
+
+	// MaxContextTokens 是当前绑定模型的有效上下文窗口（headroom 的
+	// model_max_tokens 项）。0 = 压缩禁用。阶段 3 由构造方显式给出
+	// （mini 用 -ctx-budget 演示口径）；真实能力表（caps.MaxContext）
+	// 在阶段 4+ 接管。
+	MaxContextTokens int
+	// Compression 非 nil 即启用压缩（headroom 触发，Part 3.7）。
+	Compression *CompressConfig
 }
 
 // Agent 是一个单任务的执行体（Part 8.1，阶段 2 无 Mailbox/父子拓扑）。
@@ -97,6 +105,14 @@ type Agent struct {
 	sampling   types.SamplingParams
 	thinking   types.ThinkingSpec
 	bindingSet bool
+
+	// 压缩（阶段 3）：maxContextTokens <= 0 表示禁用；compress 为 nil 同。
+	maxContextTokens   int
+	compress           *CompressConfig
+	lastCompressTokens int          // 上次压缩尝试时的上下文规模（防热循环）
+	compressLog        []CompressEvent // 本次 Run 的压缩记录（可观测）
+
+	blockReason types.BlockReason // 与 state 的双向约束见 types.BlockReason
 
 	nextPosition float64 // Fractional Index 步进器：只追加 → +1 即可，无需中点
 
@@ -129,14 +145,30 @@ func New(cfg Config) (*Agent, error) {
 	case cfg.SystemPrompt == "":
 		return nil, fmt.Errorf("agent: SystemPrompt is required (frozen prefix)")
 	}
+	if cfg.Compression != nil {
+		// 压缩装配的启动期校验（fail fast，与其它依赖同一纪律）。
+		switch {
+		case cfg.Compression.Compressor == nil:
+			return nil, fmt.Errorf("agent: Compression.Compressor is required")
+		case cfg.MaxContextTokens <= 0:
+			return nil, fmt.Errorf("agent: MaxContextTokens must be positive when compression is enabled")
+		case cfg.Compression.BudgetReserved < 0:
+			return nil, fmt.Errorf("agent: Compression.BudgetReserved must be >= 0")
+		}
+		if err := cfg.Compression.Policy.Validate(); err != nil {
+			return nil, fmt.Errorf("agent: compression policy: %w", err)
+		}
+	}
 	return &Agent{
-		id:           cfg.ID,
-		depth:        cfg.Depth,
-		sysPrompt:    cfg.SystemPrompt,
-		maxRounds:    cfg.MaxRounds,
-		sampling:     cfg.Sampling,
-		thinking:     cfg.Thinking,
-		nextPosition: 1.0,
+		id:               cfg.ID,
+		depth:            cfg.Depth,
+		sysPrompt:        cfg.SystemPrompt,
+		maxRounds:        cfg.MaxRounds,
+		sampling:         cfg.Sampling,
+		thinking:         cfg.Thinking,
+		maxContextTokens: cfg.MaxContextTokens,
+		compress:         cfg.Compression,
+		nextPosition:     1.0,
 		log:          cfg.Log,
 		views:        cfg.Views,
 		llm:          cfg.LLM,

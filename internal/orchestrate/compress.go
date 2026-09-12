@@ -2,6 +2,7 @@ package orchestrate
 
 import (
 	"context"
+	"fmt"
 
 	"marl/internal/store"
 	"marl/internal/types"
@@ -113,7 +114,18 @@ type CompressionPolicy struct {
 // (0,1) 开区间内；MaxRetries < 0。（NaN 落在开区间判定之外，同样被拒绝。）
 // 并发：纯函数。
 func (p CompressionPolicy) Validate() error {
-	panic("TODO(phase 0): placeholder")
+	switch {
+	case p.HeadroomThreshold <= 0:
+		return fmt.Errorf("compression policy: headroom threshold %d must be > 0", p.HeadroomThreshold)
+	case p.KeepTailTurns <= 0:
+		return fmt.Errorf("compression policy: keep tail turns %d must be > 0", p.KeepTailTurns)
+	case !(p.MinReclaimFraction > 0 && p.MinReclaimFraction < 1):
+		// NaN 时两个比较都为 false，同样落到这里——开区间判定天然排除 NaN。
+		return fmt.Errorf("compression policy: min reclaim fraction %v must be in (0,1)", p.MinReclaimFraction)
+	case p.MaxRetries < 0:
+		return fmt.Errorf("compression policy: max retries %d must be >= 0", p.MaxRetries)
+	}
+	return nil
 }
 
 // CompressionResult 是一次压缩的产出（Part 3.7）。

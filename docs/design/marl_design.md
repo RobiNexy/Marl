@@ -3592,6 +3592,24 @@ experimental    刚 promote 上来、还没在第二个项目验证过的
 
 **目标**：上下文满了能触发压缩，生成 SUM 并替换中段。编排操作（split / exclude / reorder）能调通。
 
+**阶段 3 已完成**（2026-09-12）：交付内容与"不做"清单的执行情况见
+`docs/test_report/phase3-test-report.md`；落地裁决（SUM 引用语义、"轮"的口径、
+L0 达标判据、哨兵、配对不变量、账本落点）见 ADR-0026。要点：
+
+- `internal/orchestrate`：七个编排 Op 全部实现（split 语义/机械、exclude、restore、
+  reorder、annotate、pin、unpin），Fractional Index 中点插入 + Stability 单调校验，
+  语义拆分的修复链（clamp/去重叠/填缝/禁切区吸附）落地；
+- `internal/compress`：OrchestrationCall 执行核（无 tools 最小上下文 + JSON mode +
+  独立预算 + 独立账本出口）、SUM 七段骨架生成与机械校验（章节 + 文件路径存在性，
+  聚合报错）、L0 机械清理（以（意图,结果）对为单位去重）、压缩主流程与 Admit；
+- `internal/agent`：headroom 触发 + Blocked(BlockCompressing) 状态迁移 + 结果采纳，
+  编译层改为按 Position 升序（编排操作改写 Position 后的必要配套）；
+- `cmd/mini -task files`：读 10 文件凑满上下文 → 触发压缩 → 打印前后 token 估算，
+  dry-run 与真跑均通过交付判据（新 View 比旧小 ≥20%、SUM 七章节齐全、压缩后任务
+  继续跑完、Log 真相完整）；
+- 真机发现的两个缺陷已修复并带回归测试：轮口径（旁白不当轮起点）、L0 配对不变量
+  （去重以对为单位 + validatePairing 终检）。
+
 具体任务：
 
 ```text
@@ -3967,7 +3985,7 @@ experimental    刚 promote 上来、还没在第二个项目验证过的
 | 0 | `go build` 过，接口全定义 | 2000 行签名代码 |
 | 1 | `go run cmd/probe` 缓存命中 | 第二次请求 cached_tokens > 0（✅ 已通过：768/963） |
 | 2 | `go run cmd/mini` 完成循环 | Log 里有完整 tool 链条 |
-| 3 | 触发压缩 | 新 View 比旧小 ≥20% |
+| 3 | 触发压缩 | 新 View 比旧小 ≥20%（✅ 已通过：真跑 8 次压缩，收益 25.7%~30.6%） |
 | 4 | 升级到 r1 | Ledger 记录两级消耗 |
 | 5 | fork 单子 | 父收到 report，子文件存在 |
 | 6 | fossil commit | timeline 有 commit，author 正确 |

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"marl/internal/skill"
 	"marl/internal/types"
@@ -55,6 +56,13 @@ type toolCallMeta struct {
 // 失败：View 非法 / 引用了取不到的 Log 条目（真相与投影失配——store 契约
 // 里的严重事件，报错而不是跳过：静默丢消息比编译失败危险）。
 func (a *Agent) compileView(ctx context.Context) (*wire.CanonicalRequest, error) {
+	if os.Getenv("MARL_DEBUG_COMPILE") != "" {
+		for i := range a.view.Items {
+			it := &a.view.Items[i]
+			fmt.Fprintf(os.Stderr, "marl-debug: view[%d] ref=%s role=%s vis=%v pos=%v\n",
+				i, it.Ref, it.WireRole, it.Visible, it.Position)
+		}
+	}
 	if err := a.view.Validate(); err != nil {
 		return nil, fmt.Errorf("agent: view: %w", err)
 	}
@@ -78,8 +86,19 @@ func (a *Agent) compileView(ctx context.Context) (*wire.CanonicalRequest, error)
 		Thinking: a.thinking,
 	}
 
-	for i := range a.view.Items {
-		item := &a.view.Items[i]
+	// 编译序 = Position 升序（Part 3.3：Position 是顺序的唯一权威）。
+	// 阶段 2 只追加时切片序即 Position 序；阶段 3 起编排操作（reorder /
+	// split / 压缩）会改写 Position，编译必须显式排序——稳定排序保证
+	// 同 Position 的条目保持切片相对序（确定性的缓存前缀）。
+	items := make([]types.ViewItem, len(a.view.Items))
+	copy(items, a.view.Items)
+	for i := 1; i < len(items); i++ {
+		for j := i; j > 0 && items[j].Position < items[j-1].Position; j-- {
+			items[j], items[j-1] = items[j-1], items[j]
+		}
+	}
+	for i := range items {
+		item := &items[i]
 		if !item.Visible {
 			continue // 软删除（exclude_message）：引用仍在，内容不入请求
 		}
@@ -94,7 +113,15 @@ func (a *Agent) compileView(ctx context.Context) (*wire.CanonicalRequest, error)
 			return nil, fmt.Errorf("agent: view item[%d] ref %s: %w", i, item.Ref, err)
 		}
 		if seg == nil {
-			continue // 无线路形态的条目（当前仅 thinking 且配置为 audit-only）
+			// 无线路形态的条目（当前仅 thinking 且配置为 audit-only）。
+			// 诊断可见性：静默跳过是"上下文缺一段"类故障的最差形态，
+			// 这里打印到 stderr 供交付检查归因（框架层的正式审计点在
+			// audit_events 落地后接管）。
+			if dbg := os.Getenv("MARL_DEBUG_COMPILE"); dbg != "" {
+				fmt.Fprintf(os.Stderr, "marl-debug: segment skipped: ref=%s role=%s content_len=%d meta_keys=%v\n",
+					item.Ref, entry.Role, len(entry.Content), metaKeys(entry.Meta))
+			}
+			continue
 		}
 		req.Segments = append(req.Segments, *seg)
 	}
@@ -153,6 +180,15 @@ func segmentForEntry(e *types.LogEntry) (*wire.Segment, error) {
 		return nil, nil
 	}
 	return &seg, nil
+}
+
+// metaKeys 返回 Meta 的键列表（诊断用）。
+func metaKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // decodeToolCallsMeta 从 Meta 里还原工具调用（与 appendAssistantToolCalls 的编码对称）。

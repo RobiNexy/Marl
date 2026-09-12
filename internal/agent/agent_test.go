@@ -353,6 +353,13 @@ func mkCall(name string, args map[string]any) types.ToolCall {
 	return types.ToolCall{ID: fmt.Sprintf("call-%s", name), Name: name, Arguments: b}
 }
 
+// mkCallID 与 mkCall 同形，但显式指定调用 id（同任务多次调用同一工具时
+// id 必须不同——与真实厂商行为一致）。
+func mkCallID(name, id string, args map[string]any) types.ToolCall {
+	b, _ := json.Marshal(args)
+	return types.ToolCall{ID: id, Name: name, Arguments: b}
+}
+
 func logEntries(t *testing.T, a *Agent) ([]*types.LogEntry, error) {
 	t.Helper()
 	// LastSeq 的哨兵口径：0 = 尚无记录（Append 从 1 起分配）。

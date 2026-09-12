@@ -719,3 +719,46 @@ DeepSeek 的思维控制分布在请求体的**两个不同层级**上，这就�
 3. **Byte-stability 是可测不变量**：冻结前缀（system + 常驻块 + Tools）的编译产物
    必须有 golden test 守着，否则某天一个"顺手清理"的改动会静默毁掉全项目缓存。
 
+
+---
+
+## ADR-0026：阶段 3（压缩与编排操作）的六项落地裁决
+
+**状态**：Accepted（对应设计文档 13.5；2026-09-12 阶段 3 交付时记录）
+
+**决策**：
+
+1. **Compress 返回的 View 引用 SUM**（"暂不引用"的措辞裁决）：Part 3.7 步骤 7 的字面
+   定义是"构造新 View = [保留头部] + [SUM] + [保留尾部]"，`CompressionResult.View`
+   的字段注释同。"主 View 暂不引用"指的是调用方的**现行** view 对象不被触碰——
+   采纳与否（`a.view = res.View`）是主 Agent 的显式决定；拒绝采纳时 SUM 条目留在
+   Log 成为未被引用的审计事实。两个表述在这层含义下相容，落地按此实现。
+2. **"轮"的口径**：一轮 = 主循环的一个 eventLoop 轮次，**轮起点是 assistant 的
+   tool_calls 意图条目**；不带 tool_calls 的文本回复（模型在调用之间的进度旁白）
+   附着于当前轮，不开启新轮。真机实测的教训：把旁白当轮起点会切出"只有一句话"
+   的微型压缩区，SUM 的固定成本超过压缩区，reclaim 归零（实测 reclaim = -0.005）。
+   user_input 一律归头部（任务原话不进压缩区）。
+3. **"L0 已独自达标"的判据**：L0 清理后的收益 `(old−l0)/old ≥ MinReclaimFraction`
+   时跳过 SUM，返回 `SUMENTry=nil` 的结果。判据只有 Compress 内一处实现
+   （触发点只判 headroom，不判收益）——契约要求的"判据唯一"落点。
+4. **"无可压缩区间"用哨兵表达**：`orchestrate.ErrNothingToCompress`。调用方据此
+   跳过压缩继续主循环，并记录触发时的上下文规模——上次尝试后上下文没有增长就
+   不重试（防热循环：否则每轮都重试压缩，把主循环变成压缩循环）。
+5. **L0 的去重以（意图, 结果）对为单位**：真机缺陷回归（见
+   `docs/test_report/phase3-test-report.md` §3.2）——只排除重复的 file_read 结果、
+   保留其 tool_calls 意图，编译出的请求就是"没有结果的工具调用"，被 Assert 拒绝。
+   修复：结果被排除时其配对意图一并排除；一个意图只有在其**全部**结果都被排除时
+   才排除。归属按**最近前向意图**计算（与线路协议的分组语义一致），模型跨轮复用
+   同一 tool_call id 时仍然正确。`validatePairing` 在三处产出点（L0-only / SUM /
+   Admit）做与 wire.Assert 同构的终检。
+6. **编排账本的落点**：阶段 3 定义 `compress.UsageSink` 窄接口（mini 用控制台出口），
+   SQLite Ledger（`store.Ledger.RecordOrchestration`）在阶段 4 接管。独立预算
+   （`EngineConfig.MaxTotalTokens`）在本阶段即生效：超预算的编排调用在发出前被拒。
+
+**依据**：真机 12+ 轮交付检查（含 2 次 assert 失败的归因复现）、
+`internal/compress` 与 `internal/orchestrate` 的测试矩阵、
+`docs/test_report/phase3-test-report.md`。
+
+**回退代价**：撤掉配对不变量，L0 去重在"模型重复读同一文件"的场景下必然产出
+被厂商拒绝的请求；撤掉轮口径裁决，长工具循环任务的压缩区被单条 user 消息吞掉，
+压缩永不触发。

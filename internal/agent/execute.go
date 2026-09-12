@@ -27,6 +27,11 @@ import (
 //     分类带回（恢复策略全是 13.5+ 的范围）。
 func (a *Agent) eventLoop(ctx context.Context) error {
 	for round := 0; round < a.maxRounds; round++ {
+		// 压缩检查在编译之前：headroom 不足先压缩再编译，避免把一个
+		// 必然溢出的请求发给厂商（Part 3.7 的触发点）。
+		if err := a.maybeCompress(ctx, round); err != nil {
+			return fmt.Errorf("agent: round %d: compress: %w", round, err)
+		}
 		req, err := a.compileView(ctx)
 		if err != nil {
 			return fmt.Errorf("agent: round %d: compile view: %w", round, err)
