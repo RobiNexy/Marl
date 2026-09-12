@@ -7,6 +7,8 @@
 *.p12
 auth.json
 credentials.json
+# 本地测试密钥（第 1 行是密钥；各人自备一份，不入版本控制）
+deepseek_test_api_key
 
 # 运行期数据（真相之源/投影，不入版本控制）
 *.db

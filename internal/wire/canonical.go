@@ -153,10 +153,21 @@ type ToolDef struct {
 // 的具体标记）。那类信息只允许在 Normalizer 之后、由 CacheControl 承载。
 // 这条靠代码评审 + golden 测试守护，因为一旦破例，"换厂商"就不再是加一个
 // 适配器的事，而是要回头改这个承重结构。
+//
+// OutputJSON 是**语义层**的"要求合法 JSON 输出"声明（阶段 1 补，见 ADR-0017）：
+// 它不说"用哪个字段表达"，那是 Normalizer 的事（OpenAI 兼容线路翻译成
+// response_format={"type":"json_object"}，Anthropic 线路没有对应字段，
+// 只能降级成 prefill/工具调用）。放在 Canonical 而不是 WireRequest，是为了
+// 让"我要 JSON"这个需求不依赖具体厂商——它同时也是 TaskPolicy.OutputFormat
+// 那类语义需求的落点。
+//
+// 零值 false = 不要求 JSON 输出（默认文本）。这不是"未设置"：
+// 它导致的后果是"不发送任何输出格式声明"，与厂商默认行为一致，方向安全。
 type CanonicalRequest struct {
-	Segments []Segment
-	Tools    []ToolDef
-	Sampling types.SamplingParams
-	Thinking types.ThinkingSpec
-	Prefill  *string // 期望的 assistant 开头；可能被 Normalizer 降级
+	Segments   []Segment
+	Tools      []ToolDef
+	Sampling   types.SamplingParams
+	Thinking   types.ThinkingSpec
+	Prefill    *string // 期望的 assistant 开头；可能被 Normalizer 降级
+	OutputJSON bool    // 要求输出合法 JSON（语义层；由 Normalizer 翻译成协议形态）
 }

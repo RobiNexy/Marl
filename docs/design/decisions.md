@@ -113,13 +113,14 @@ Endpoint/Model`；`request_reconfigure` 的语义是"我卡住了 + 原因"，�
 
 ## ADR-0007：每个 Agent 独立缓存桶，不配置、不暴露选项
 
-**状态**：Accepted（对应设计文档 Patch 1 / 10.15）
+**状态**：Accepted（对应设计文档 Patch 1 / 10.15）；桶**字段名**与"全局公共桶"的
+后续裁决见 **ADR-0021**（`user` → `user_id`，且公共桶方案被实测否决）
 
 **决策**：`Binding.CacheBucket` 的唯一来源就是 `AgentID`；
 `EndpointConfig` 不提供 `bucket_strategy`。
 
-**落地**：请求的 `user` 字段 = `binding.CacheBucket`；`Router.Bind(req, agentID, ...)`
-直接把 agentID 写进 Binding。
+**落地**：请求的 `user` 字段 = `binding.CacheBucket`（字段名后被 ADR-0021 修正为
+`user_id`）；`Router.Bind(req, agentID, ...)` 直接把 agentID 写进 Binding。
 
 **理由**：省掉"缓存粒度"这个配置维度的全部心智负担——这是简单且唯一正确的策略。
 
@@ -315,6 +316,398 @@ Endpoint/Model`；`request_reconfigure` 的语义是"我卡住了 + 原因"，�
 重排，则"换厂商/加工具"不再是加一个适配器的事，并且缓存命中率会随每次
 无关重构波动；这类波动无法归因，只能一律按"缓存本来就不可靠"来对待，
 等于放弃成本可预测性。
+
+---
+
+## ADR-0016：一次调用三段硬分层，错误分类只归 Denormalizer
+
+**状态**：Accepted（对应设计文档 Part 10.9 / 10.11 / 10.12 与 13.3）
+
+**决策**：一次调用的职责分三段，且**不重叠**：
+
+1. **Normalizer**：语义（CanonicalRequest）→ 协议（WireRequest）。做角色布局、参数剔除、
+   能力降级记录；不做 IO。
+2. **Adapter.Execute**：协议编码 + 发 HTTP + 读**原始字节**。不做错误分类、不做参数剔除、
+   不做角色布局。
+3. **Denormalizer**：原始字节 → WireTurn + `ErrorClass`。它是"同一语义在各厂商的不同
+   编码"那张表的唯一持有者。
+
+由此推出两条接口契约：
+
+- **厂商错误不进 `error` 返回值**：只要收到了 HTTP 响应（任何状态码），`Execute` 返回
+  `(*WireResponse, nil)`；错误详情留在 `resp.Body` + `resp.StatusCode` 里。`err` 只表达
+  三类：装配错误（线路/接入点/模型错配、编码自检失败）、未收到响应、响应体超限。
+- **重试与熔断的判据只有一个来源：`ErrorClass`**。任何"先看 error 再决定要不要重试"的
+  代码都是第二套判据。
+
+**落地**：
+
+- `WireResponse.StatusCode == 0` 是**已定义取值**：0 = 没收到响应（连接失败/超时/取消），
+  与"收到 4xx/5xx"是两回事。零值契约写在类型上，不是实现细节。
+- `Execute` 的三类传输失败必须可区分：caller ctx 结束 → 原样 `ctx.Err()`（上游停机不是
+  厂商故障，包装它会让熔断计数虚高）；`SamplingParams.TimeoutMs` 超时 → `ErrCallTimeout`
+  （`%w` 链上 `ctx.Err()`，让按 `errors.Is(err, context.DeadlineExceeded)` 判断的既有代码
+  继续有效）；其它 → 普通错误。
+- `Denormalize` 的顺序是"状态码 → 可解析性 → 分类 → 拆解"：`StatusCode == 0` 先于空 body
+  检查，否则 `classifyOpenAIChatError` 的 `status==0` 分支是死代码；非 2xx 但 body 为空或
+  非法 JSON 时仍**仅凭状态码**分类（`statusOnlyClass`），因为网关 502/503 常常不带体。
+- 适配器**不设**全局 `http.Client.Timeout`：单次超时来自 `TimeoutMs`（每档位可不同），
+  全局值会把两类超时混成一个，并让"某档位用长超时"变成不可表达的配置。
+- 响应体超限时**丢弃** body 只留状态码：半截 JSON 在 Denormalizer 眼里是"无法解析"，
+  会把一个明确的"响应体过大"错误归成解析错误。
+
+**理由**：错误分类必须发生在能同时看到"厂商编码细节"与"统一语义"的那一层。放在适配器
+里，body 要么被丢掉（调用方再也拿不到厂商原文），要么被当字符串解析（退化成关键词匹配，
+厂商改一个字就失效）。两套判据（`err` 与 `ErrorClass`）则会让"该不该重试"取决于调用方
+恰好读了哪个字段——同一件事两个答案，是排查成本最高的那类 bug。
+
+**回退代价**：回到"非 2xx 就在适配器报错"，则 429（可重试）与 400（不可重试）在调用方
+眼里长得一样，只能靠字符串猜；错误分类表会分散到每个调用点，换厂商时要改的地方从一处
+变成一片。
+
+---
+
+## ADR-0017：语义与协议分离——`CanonicalRequest.OutputJSON` 而非 `response_format`
+
+**状态**：Accepted（对应设计文档 Part 10.10 / 10.16 与 TaskPolicy 的输出格式需求）
+
+**决策**：`CanonicalRequest` 只表达**语义需求**（"要求输出合法 JSON"），协议形态由
+Normalizer 决定：
+
+- `CanonicalRequest.OutputJSON bool`：语义层，厂商无关。零值 `false` = 不要求（默认文本），
+  方向安全，不是"未设置"；
+- `WireRequest.ResponseFormat OutputFormat`：协议层，取值 `""`（不发送）与
+  `json_object`。**`"text"` 不是合法值**——它就是零值的语义，允许显式 `"text"` 会让同一
+  语义有两种编码方式，字节稳定与 golden 测试都变得含糊。
+
+**落地**：`OutputFormat.Valid()` 只认 `OutputFormatNone` / `OutputFormatJSONObject`；
+`normalizeOutputFormat` 在模型缺 `CapJSONMode` 时剔除字段并记 `DegradParamStripped`
+（照发是 400 = capability 错误；不发是"输出不保证是合法 JSON"，上层要么重试要么自己容错
+——两种处置的差别必须让上层看见）。
+
+**理由**：OpenAI 兼容线路把它翻译成 `response_format={"type":"json_object"}`，而 Anthropic
+线路**没有对应字段**，只能降级成 prefill 或工具调用。把 `response_format` 放进
+`CanonicalRequest` 等于把一条线路的字段名写进承重结构，"换厂商 = 加一个适配器"立刻失效。
+
+**回退代价**：语义需求与厂商字段再次混在同一个结构里，则每个消费点都要知道"这条线路上
+要 JSON 该怎么表达"，新增线路时要回头改 `CanonicalRequest` 及其全部构造者。
+
+---
+
+
+## ADR-0018：Normalizer 只实现它能看见的字段，看不见的策略归编译层（不造占位字段）
+
+**状态**：Accepted（对应设计文档 Part 10.9 与 10.10）
+
+**决策**：`NormalizePolicy` 的字段分三类处置，且**不为了"字段表看起来完整"而添加
+填不进也读不出的字段**：
+
+1. **Normalizer 能看见的 → 在此实现**：`MultiSystem`、`ConsecutiveSame`、`TailAssistant`、
+   `ToolResultRole` 四个具名策略（Part 10.9 的决策点）。它们的零值 `""` 的语义是
+   **"不覆盖，用目标线路的内置默认策略"**，而不是某个具体策略名——策略名写错（配置笔误）
+   在 `Validate` 期直接报错，而空 `NormalizePolicy{}` 仍然可用
+   （`LoadPolicyOverride` 要求"空策略不得凭空改变请求布局"）。
+2. **Normalizer 看不见但确实要用的 → 留给消费它的那一层，并在字段上写明错位**：
+   `Roles` / `Trimmable` 的键是 `types.InternalRole`，而 Normalizer 的输入 `Segment` 只有
+   `(Kind, Speaker)`——`InternalRole` 在编译层就被折叠掉了（`Segment` 不变量表里没有它）。
+   因此这两个字段由**编译层**消费；Normalizer 用的是 `(Kind, Speaker) → WireRole` 的默认表。
+3. **本层没有落点且无人消费的 → 不建字段**：`HistoricalThink`（Part 10.9 的第五个决策点）
+   故意没有对应字段。它的取值作用于"历史思维链段"，而 `Segment` 无法表达"这是一条思维链"
+   （没有 `InternalRole`，也没有 Thinking 标记）；在 Normalizer 层实现只能靠猜，因此剥离
+   历史思维链的责任归编译层（它读得到 `InternalRole`）。
+
+同一原则也约束 `WireRequest.Prefill`：阶段 1 的 OpenAI 兼容线路**未实现 prefill**，
+`WireRequest.Prefill` 恒为 `nil`（唯一合法值），且每次都在 `NormalizeResult.Degradations`
+里留一条记录，理由写明"上层应把 prefill 改写为尾部 Transient 提示"（10.10）。
+
+**理由**：字段存在但填不进/读不出，或填了但由别处消费，都属于 ADR-0014 所说的**静默失效**
+（配置写了但不生效）——而"错位"比"缺失"更危险：字段名看起来完全正确，评审与运行时都没有
+异常迹象，只有行为不对。把"谁消费它"写在字段注释里，是让这种错位可评审的最低成本。
+
+**回退代价**：删掉 `Roles` / `Trimmable` 会让编译层在阶段 2 再补一次同概念字段；反过来，
+允许 Normalizer "尽力实现"它看不见的策略（例如按 `Segment` 猜哪条是思维链），则策略是否
+生效变成随输入而定的随机行为，且无法用测试钉死。
+
+---
+
+## ADR-0019：Outcome 不变量只约束成功产出；失败产出是唯一例外
+
+**状态**：Accepted（对应设计文档 Part 10.11 / 10.16）
+
+**决策**：`Outcome` 的不变量"Reasoning / Reply / ToolCalls 至少有一项非空"**只约束成功
+产出**。厂商报错时产出的是**失败产出**：三项皆空，全部信息在 `Signals.ErrorClass` 里。
+
+由此推出两条消费纪律：
+
+- 判定"这一段有没有内容"必须看 `Signals.ErrorClass.IsError()`，**不能**只看三项是否为空；
+- 失败产出的 `Usage` 为 `nil`（未知），不是零值结构体。
+
+**落地**：`failureTurn(class)` 是失败产出的唯一构造点（`Denormalize` 的四条边界都汇到它，
+见 ADR-0016）；`ThinkingOutcome.ActualLevel` 在 `Denormalize` 侧留空——它需要请求侧信息
+（Normalizer 降级后的档位），而 `Denormalize` 手上只有响应，由调用方用
+`NormalizeResult.Degradations` 回填。
+
+**理由**：厂商报错时没有任何内容可产出。为了让不变量成立而往 `Reply` 里塞错误文本，主循环
+会把厂商报错当成"模型说的话"写进 Message Log 并回灌上下文——一次瞬时故障被永久化进历史，
+之后的每一轮都在向模型复述那次故障。
+
+**回退代价**：恢复"失败也必须有内容"，则 Log 里无法区分"模型说的"与"框架补的"，审计与
+重放同时失效（违反 ADR-0002 的真相之源原则）。
+
+---
+
+
+## ADR-0020：思维参数的协议形态由线路定义，用类型承载层级（`openAIChatThinking`）
+
+**状态**：Accepted（对应设计文档 Part 10.9 / 10.10 与 13.3 的 `openai_chat` 线路）
+
+**决策**：`WireRequest.Thinking` 的类型是 `any`，但**每条线路必须定义自己的协议形态类型**，
+且该形态必须能表达"哪个键放在哪一层"。OpenAI 兼容线路的形态是 `openAIChatThinking`：
+
+```
+开关：{"thinking": {"type": "enabled" | "disabled"}}      ← 对象信封内
+强度：{"reasoning_effort": "none"|"low"|"high"|"max"}     ← 顶层字段
+```
+
+DeepSeek 的思维控制分布在请求体的**两个不同层级**上，这就是不能用
+`map[string]any` 承载的原因：map 没有"这个键该放顶层"的信息。`BudgetTokens`
+仅 `ThinkControlBudget` 使用（DeepSeek 侧没有预算字段，只有兼容网关认这个形态）；
+保留它是因为删掉一个已发出的形态属于行为变更，而阶段 1 没有证据说它有害。
+
+**落地**：
+
+- 映射规则（每一支都必须可观测，不允许静默）：
+  - 模型未声明 `thinking` 能力：只有 `""`（不指定）与 `off` 能安全满足；要求"开"则记
+    `DegradThinkingUnavailable` 并彻底移除参数；
+  - `Level == ""` 且无 `Budget`：不发送任何思维参数（"不指定" ≠ "关闭"）；
+  - `Level` 不在模型的 `thinking_levels` 里：记 `DegradThinkingLevel` 并回落为"不发送"
+    （模型默认档位）——**不**擅自挑最接近的档位，那会改变成本与输出而调用方以为档位生效了；
+  - `ThinkControlBudget` 且给了 `Level`：档位在协议里没有落点，记 `DegradThinkingLevel`
+    （`on` 除外：它是框架开关词，而"要不要带预算"由 `Budget` 是否给出决定）；
+  - `off` 是**框架开关词**，不查档位表：它在三种控制方式下分别落成 `disabled`（bool /
+    budget）与 `none`（level）。level 控制下的关闭取值要在 `caps.ThinkingLevels` 里查
+    （能否关闭是**模型属性**，不是线路常量：有的模型只有 low/high）；
+- `Assert`（`assertOpenAIChatThinking`）**只校验形态、不校验取值**：取值空间由
+  `models.yaml` 的 `thinking_levels` 定义，在这里枚举等于把厂商词汇写进框架；
+- 未知类型**报错**、空的 `openAIChatThinking`（三字段全空）**报错**（应当直接给 `nil`，
+  否则"没要求"与"要求了但翻译成空"无法区分）；编码器遇到未知类型同样**报错而不是丢弃**
+  （静默丢弃 = 思维参数没发出去，而调用方以为发过了）。
+
+**理由**：早期实现把开关与强度都塞进 `thinking` 对象（`{"thinking":{"type":"low"}}`）——
+文档明说 `reasoning_effort` 既管开关又管强度，而 `thinking` 对象只认 `enabled`/`disabled`。
+发错的后果是**静默失效**：档位请求了但强度还是默认，探测报告里表现为"每个档位的
+`reasoning_content` 都一样长"，极易被当成"模型就是这样"。`Thinking` 的类型是 `any`，
+类型安全为零，`Assert` 因此是唯一的防线。
+
+**回退代价**：用 `map` 承载则"这个键该放顶层"的信息丢失，编码器只能猜；把厂商档位词
+枚举进框架，则新增模型档位要改代码（违反 Patch 1 的"档位数由配置声明"）；
+把关闭取值硬编码成 `none`，则没有关闭档位的模型会收到 400 或被静默忽略——而调用方
+以为已经关了思考。
+
+---
+
+
+## ADR-0021：缓存桶字段是 `user_id`（不是 `user`），且桶隔离——"全局公共桶"方案否决
+
+**状态**：Accepted（对应设计文档 10.15 / 13.3；阶段 1 探测的裁决）
+
+**决策**：三条一起定：
+
+1. 缓存桶落到 DeepSeek `openai_chat` 请求体的字段名是 **`user_id`**（`wire.DefaultBucketField`）。
+   `Binding.CacheBucket` 的语义与来源不变（= AgentID，ADR-0007）。
+2. 桶是**隔离**的：不同 `user_id` **不共享**前缀缓存。因此**不做**"全局公共桶热身请求"，
+   接受"N 个 Agent 重复存储公共段（system + tools）"的代价。
+3. 厂商 API 已更新：`remote_name` 用现行模型名（`deepseek-flash` / `deepseek-v4-pro`），
+   thinking 是**档位控制**（`thinking_control: "level"`，`thinking_levels: ["none","low","high","max"]`），
+   不再是 `bool` + `["off","on"]`；usage 主字段是 `prompt_cache_hit_tokens`
+   （`prompt_tokens_details.cached_tokens` 是同值别名）。
+4. **厂商的"静默改写"必须在框架侧可见**（同批实测，写入设计文档 §6.3 / §10.9）：
+   - 思考模式下 `temperature` / `presence_penalty` / `frequency_penalty` **设置不报错也不生效**，
+     `top_p` 被抬升到 ≥0.95（非思考模式恒为 1.0）→ 采样参数不能当作"我设了就生效"；
+   - 历史 `reasoning_content` 的**回传规则取决于请求是否带 `tools`**（带 tools 应当回传、
+     会被拼进上下文；不带 tools 传了也被忽略）→ 这是"历史思维链"策略的输入，也是成本项。
+
+**依据**（全部可复现，见 `docs/design/probe-report-phase1.md` 与 `probe-run-record-phase1.md`）：
+
+- 官方 `chat-complete.html`：请求参数是 `user_id`（字符集 `[a-zA-Z0-9\-_]`、≤512），
+  并明确写着"`user_id` 可用于 KVCache 缓存隔离，以进行隐私管理"——**隔离是厂商承诺**；
+- 探测用例 6a/6b：本桶用**本轮全新**前缀（带 nonce，工具强制校验本桶 `cached=0` 作为
+  可归因前提），另一桶发逐字节相同的请求 → `cached=0`；
+- 同一份代码在"另一桶是全新状态"时同样给 `cached=0`（三轮证据同向）。
+
+**为什么必须记下来**：探测用例的**初版形态是不可归因的**——它沿用固定前缀，而缓存是持久的，
+于是上一次运行留下的副本让"另一个桶"在第二次运行时命中，同一套代码在两轮里给出**相反**
+结论（轮 1"不共享"、轮 2"共享"）。结论的可归因性依赖"前缀是全新的"这个前提，而该前提
+必须被**显式校验**，不能靠"应该没跑过"。以后任何跨桶/跨会话的缓存探测都要沿用这个形态。
+
+**回退代价**：继续用 `user` 则桶参数被厂商忽略或 400（缓存隔离失效 = 不同 Agent 互相
+污染缓存桶，是**正确性**问题，不只是性能问题）；沿用 `bool` + `["off","on"]` 则档位永远
+发不出去（`reasoning_effort` 缺席 = 走默认 `high`，账单与输出都与配置不符）；按
+`prompt_tokens` 算成本则缓存省下的钱在账面上看不见（命中部分与未命中部分单价不同）。
+
+**顺带确立的不变量**：前缀缓存**从第 1 个 token 起算、按单元对齐**——前缀第一个 token
+变了就零命中（nonce 放在 system 末尾时仍命中 768，移到开头后为 0）。这是 10.3
+"`frozen` 段 byte-stable 是硬要求"的实证。
+
+---
+
+## ADR-0022：thinking 档位的唯一真相是 `Binding.Thinking`（阶梯），Normalizer 回退读它、冲突即报错
+
+**状态**：Accepted（对应设计文档 10.6 / 10.9；阶段 1 探测报告 §3.1 的裁决）
+
+**决策**：四条一起定：
+
+1. **`Binding.Thinking` 是唯一真相**。档位配在**阶梯**上（`ladder.rung.thinking` → `Binding.Thinking`），
+   §10.6 的"thinking 开关在阶梯级别，不在 model 定义里"由此落地。
+2. 装配/编译层**应当**把它拷进 `CanonicalRequest.Thinking`——拷贝点是唯一入口（一处的
+   `req.Thinking = binding.Thinking`），不是"两处都可以写"。
+3. Normalizer 侧加**回退 + 冲突检测**（这是本 ADR 的关键，因为"忘记拷贝"不能靠人记得）：
+   - `req.Thinking` 为空（`Level == "" && Budget == nil`）→ 用 `binding.Thinking`；
+   - 两者都非空且**不相等** → **报错**（框架错误，不发请求）。
+   于是"档位配了却不生效"这类**静默失效**在结构上不可达：要么生效，要么炸。
+4. 每请求改档位（压缩器要关思考、探测器要逐档位验证）必须走 **Rebind / 显式构造 Binding**，
+   不允许只改 `CanonicalRequest`。这也是 `proto.Reconfigure.Thinking` 的既有语义
+   （它替换的是绑定的档位）。
+
+**依据**：
+
+- 设计文档 §10.6 明确"档位是阶梯的属性"，而 `internal/wire` 的 `build()` 只读
+  `CanonicalRequest.Thinking`，全项目**没有任何代码**读 `Binding.Thinking`（阶段 1 没有编译层，
+  缺口尚未暴露成 bug）；
+- 缺口的风险形态是**静默失效**：档位配在阶梯上 → 请求照发、`reasoning_effort` 缺席 →
+  走厂商默认档位（实测默认是 `high`）→ 账面（`WireRequest.Thinking` 为空）与预期
+  （"我配了 low"）不一致，而日志里什么都看不出来。成本与输出都变了却无人知晓。
+
+**为什么不让 `CanonicalRequest.Thinking` 覆盖 `Binding.Thinking`**（被否决的替代）：
+那会出现"请求级覆盖悄悄改变成本档位"，而审计里只有请求体、没有"谁改的"——§7.1 的
+阶梯升级决策读的是阶梯，实际跑的却是另一个档位，升级证据与成本核算同时失真。
+
+**为什么删掉 `CanonicalRequest.Thinking`**（另一条被否决的替代）：Canonical 是"协议无关的
+规范形态"，"这次调用要什么档位"是它的合法内容（压缩/总结调用与主循环调用的档位本就不同），
+删掉字段等于逼每个调用点自己拼 `ThinkingSpec` 再塞进 Binding，反而多出更多入口。
+
+**落地状态（必须与决策一起记）**：**尚未实现**。阶段 1 的探测工具是临时绕过——`call()`
+同时填两处（同值，因此不触发冲突），让测量不受歧义影响。实现它是阶段 2 的第一件事，
+测试计划（先写测试再改代码）：
+
+- `TestBindingThinkingAppliesWhenCanonicalEmpty`：Canonical 留空 + Binding 带 `low`
+  → 请求体出现 `reasoning_effort=low`；
+- `TestBindingThinkingConflictErrors`：两处都非空且不同 → `BuildRequest` 返回错误（不是降级）；
+- `TestBindingThinkingOffMapsToProtocolOff`：Binding 带 `off` → 走 `levelOffValue` 的 `none`；
+- golden 回归：现有用例的请求字节不得变化（Canonical 显式给了 thinking 的那些调用点，
+  两处同值，回退不触发）。
+
+---
+
+## ADR-0023：带 `tools` 的历史 `reasoning_content` 默认**全量回传**；不带 `tools` 时**不发送**
+
+**状态**：Accepted（对应设计文档 10.9；阶段 1 探测报告 §3.6 的裁决）
+
+**决策**：
+
+1. 请求**带 `tools`** 时，Message Log 里保留的历史思维链按原字段 `reasoning_content`
+   **全量回传**（这是厂商文档"均应回传"的字面要求）。
+2. 请求**不带 `tools`** 时**不发送**该字段（实测被忽略，见下）。
+3. 裁剪（只回传最近 K 轮）**不作为默认**，只作为显式配置项；开启它的前提是
+   "有重复采样的行为证据 + 质量评估"，不允许只凭 token 省量就打开。
+4. Message Log **始终完整保留**思维链（审计/复盘），是否进请求体由本条策略决定——
+   "保留"与"回传"是两件事。
+
+**依据**（轮 5 与轮 6 两次独立运行，数字完全一致）：
+
+| 形态 | 轮 5 prompt | 轮 6 prompt | 相对不回传 |
+| :-- | --: | --: | --: |
+| 全量回传（每条历史 assistant 都带） | 1458 | 1458 | **+92** |
+| 只回传最近一轮 | 1404 | 1404 | **+38** |
+| 完全不回传（不发该字段） | 1366 | 1366 | 基线 |
+| 带字段但值为空串 | 1366 | 1366 | 0 |
+
+- **四种形态全部 200 接受**：文档的"均应回传"是**期望**，不是硬校验。裁剪在协议上可行；
+- 但回传的内容**确实被拼接进上下文**（差值恰等于两段固定思维链的 token 数：`+92 = rc1+rc2`、
+  `+38 = rc2`）→ 省下的 token 是**真的**，不是账面幻觉；
+- **不带 `tools` 时带与不带的 `prompt_tokens` 完全相等（1005 vs 1005）**：文档"传入也会被
+  忽略、不会拼接进上下文"**成立** → 不带 tools 时发它是纯浪费（不进上下文，却增加请求字节，
+  且未来口径可能变）；
+- 回传形态对**行为**没有可观测的系统性影响：两轮里"是否再次调用工具"的分布不一致
+  （轮 5 只有"只回传最近一轮"返回 `tool_calls`；轮 6 有三态返回 `tool_calls`）→
+  单次样本不可归因，**不能**用"裁剪后行为没变"来论证裁剪安全。
+
+**权衡**：裁剪每轮省 ~54 token（92−38），代价是"历史思维链不完整"这一状态进入模型上下文，
+而质量影响**无法**用探测判定（需要重复采样 + 评分）。合规默认（全量回传）比省 54 token/轮
+更重要——[权衡: 省 token 的收益可量化且很小，质量风险不可量化]。
+
+**落地状态（必须与决策一起记）**：**当前没有通路**。`Segment`、`WireMessage`、
+`openAIChatReqMessage` 上都没有承载历史思维链的字段，`encodeOpenAIChatMessage` 也不写
+`reasoning_content`——也就是说，**今天带 tools + thinking 的多轮请求发出去的是"缺失历史
+思维链"的形态**（实测被接受，因此不会报错，只会静默丢上下文）。阶段 2 的落地清单：
+
+1. 通路：`WireMessage.Reasoning`（或 `Segment.Reasoning` + 编译层折叠），编码器按
+   `HistoricalThink` 策略决定是否写 `reasoning_content`；
+2. 字节稳定：它进的是 **stable/frozen 前缀**，历史思维链一旦落库就不再变 → 前缀仍稳定，
+   但**任何"重写/截断思维链"的行为都会破缓存**，需要 golden 测试守；
+3. 不带 tools 时不发送（本 ADR 第 2 条）；
+4. 计数器：回传的 token 计入成本（`prompt_cache_miss_tokens` 会涨），成本模型要能看到它。
+
+---
+
+## ADR-0024：缓存单元端点间隔实测 128 token，但**不做**"前缀补齐到单元倍数"的优化
+
+**状态**：Accepted（对应设计文档 10.3 / 10.15；阶段 1 探测报告 §3.9）
+
+**决策**：
+
+1. 实测记录：隐式前缀缓存的**单元端点间隔 = 128 token**（`cached_tokens` 的台阶跳幅恒为 128：
+   768 → 896 → 1024，两轮独立复现）。
+2. **不做**"把冻结前缀补齐/裁剪到 128 的倍数"这类优化：`cached_tokens` **不等于**
+   `floor(prompt_tokens / 128) * 128`（实测残差最大 250 token），命中长度取决于厂商**实际落盘了
+   哪些单元端点**，而落盘时机是厂商的启发式（`cache.html`：请求结束位置落盘 / 公共前缀检测落盘 /
+   按固定 token 间隔落盘）。把前缀凑成 128 的倍数**不能**保证多命中。
+3. 前缀策略仍按原设计：`frozen` 段 byte-stable（ADR-0015）、`volatile` 只在尾部、
+   命中率统计用 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`。
+
+**依据**：探测用例 7（截断扫描）：对同一段文本先发最长的一份建立缓存，再发它的逐字符截断
+（每次 +40 字符 ≈ +28 token），观测 `cached` 随长度变化的台阶——10 次采样落在 3 个台阶上，
+两次跳幅都是 128，且最大残差 250（> 128）。
+
+**为什么这条要写成 ADR 而不是留在报告里**：它是**否决一条优化路线**的记录。没有它，
+后来的人看到"单元间隔 128"会自然推出"那就把前缀对齐到 128"——一个看起来显然、实测无效、
+且会让冻结前缀的字节为了一个无效目标而变动的改动。
+
+**待办（阶段 2）**：用步长 ~10 token 的细扫描定死对齐规则（当前只测到"台阶 128"，
+"哪些端点会落盘"仍未解释；报告 §3.9 记着这个缺口）。
+
+---
+
+## ADR-0025：thinking 档位只声明"可用性"，**不**声明强度或成本
+
+**状态**：Accepted（对应设计文档 10.4 / 10.6 / 10.9；阶段 1 探测报告 §3.8）
+
+**决策**：
+
+1. `thinking_levels` 只表达"该模型接受哪些档位"。框架**不**为档位声明强度序，也**不**提供
+   "卡住了就降一档省钱"这类旋钮——档位是**能力**开关（够不够用），不是成本旋钮（省不省）。
+2. 成本模型**不能**按档位定值：`reasoning_per_mtok` 若逐档给定值，那些数字会在两次运行之间
+   自相矛盾（见"依据"）。成本估算只给量级，或按"同档位同分布"处理。
+3. 任何"档位 A 比档位 B 省 X%"的说法必须同时报出**重复次数与极差**；单次采样、甚至一次
+   3 次重复的均值，都不构成证据。
+
+**依据**：探测用例 4，两轮各 3 次（同一命令、同一问题、同一前缀）：
+
+- 轮 5：`low` 830（656~1073）< `high` 955（677~1150）< `max` 1054（693~1381）→ 单调；
+- 轮 7：`low` 775（684~847）**>** `high` 725（623~869）< `max` 790（701~948）→ **不单调**。
+
+合并 6 次：0 < 802 < 840 < 922，但相邻档位差值（38 / 82）只有同档位极差（417 / 527 / 688）
+的 1/5 ~ 1/18——**档位间差异淹没在同档位波动里**。
+
+**为什么这条要写成 ADR**：它是"**拒绝一个旋钮**"的记录。没有它，成本模型会很自然地把
+`thinking_levels` 当成成本档（"卡住了就降一档省钱"），而这个前提实测不成立：降档既不能保证
+省钱，也不能保证变弱。与 ADR-0024 同类——看起来显然、实测不成立的路，必须留档。
+
+**落地**：设计文档 §10.4 的 `thinking_levels` 条目与 §10.6 的档位语义已按此收口；探测工具的
+`checkLevelMeans` 在两种结果下都会提示"必须带重复次数与极差"。
+
+**待办（阶段 2，若真要做档位成本建模）**：先做采样量实验（每档 ≥20 次）把效应/噪声比测出来；
+在那之前成本模型不得引用档位。
 
 ---
 

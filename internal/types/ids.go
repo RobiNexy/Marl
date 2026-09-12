@@ -48,7 +48,36 @@ type RungID string
 // WireID 标识一条线路协议。设计上只有 3–4 个（极低变化频率），
 // 如 openai_chat / anthropic_messages / gemini（Part 10.2）。
 // 放本包是因为 types.Binding 需要引用它，而 wire 包又要引用 types（避免循环依赖）。
+//
+// 零值契约：与大多数枚举不同，零值 WireID("") **不是**"未识别"，而是
+// "未指定线路"。这是有意的：Binding 在 Router 选定之前确实没有线路，
+// 而"未指定"必须能被表达（否则 Router 的中间候选只能填一个假值）。
+// 但两个消费点的规则不同，不能混用：
+//   - 入口构造（Binding → CanonicalRequest → WireRequest）必须显式赋值，
+//     零值一律判错——用空线路发请求等于"用 A 协议编码、用 B 协议解析"；
+//   - 查询/谓词遇到零值必须按"未指定"处理，绝不能回落成一个具体线路。
 type WireID string
+
+const (
+	// WireOpenAIChat 是 OpenAI 兼容的 chat/completions 协议
+	// （Deepseek 走这条）。阶段 1 唯一实现的线路。
+	WireOpenAIChat WireID = "openai_chat"
+)
+
+// Valid 报告 w 是否为已实现的线路协议。零值返回 false。
+//
+// 为什么只声明已实现的线路：anthropic_messages / gemini 在各自适配器落地时
+// 才加入本表。先声明后实现会让"声明了但没有实现"静默存在——Router 会把它
+// 当成可路由的线路（见 ADR-0014 对"静默失效"的分类）。
+//
+// 并发：纯函数。
+func (w WireID) Valid() bool {
+	switch w {
+	case WireOpenAIChat:
+		return true
+	}
+	return false
+}
 
 // DiscussionID 是讨论分支的 ID，形如 discuss_<ulid>（Part 11.2）。
 type DiscussionID string

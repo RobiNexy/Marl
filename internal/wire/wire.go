@@ -27,6 +27,12 @@ type WireAdapter interface {
 
 	// Execute 发起一次 LLM 调用并返回归一化前的产出。
 	//
+	// 入参是**已归一化**的 WireRequest（阶段 1 修正，见 ADR-0016）：分层上
+	// Normalizer 已完成角色布局与参数剔除，适配器只做"协议编码 + 发请求"。
+	// 若这里收 CanonicalRequest，适配器就必须自己再做一遍去程翻译（破
+	// Normalizer 的单一职责与字节稳定），或者绕开 Normalizer 的降级记录——
+	// 两条路都会让"请求是谁排布的"没有唯一答案。
+	//
 	// 注意：本接口不负责并发控制——并发闸门 / 限流 / 熔断 / 排队由 Pool 承担
 	// （Part 10.12）。除非是 Pool 内部的临时直通，否则调用方不要绕过 Pool。
 	//
@@ -40,9 +46,9 @@ type WireAdapter interface {
 	// 原始证据），**不做分类、不重试**。ctx 取消必须原样返回 ctx.Err()，
 	// 不得包装成厂商错误——否则"上游取消了调用"会被误当成"厂商故障"，
 	// 进而污染熔断计数与升级证据。
-	Execute(ctx context.Context, req *CanonicalRequest, binding types.Binding) (*WireResponse, error)
+	Execute(ctx context.Context, req *WireRequest, binding types.Binding) (*WireResponse, error)
 
-	// ModelName 把 types 层面的模型 id 翻译成远端模型名（如 "deepseek-chat"）。
+	// ModelName 把 types 层面的模型 id 翻译成远端模型名（如 "deepseek-flash"）。
 	//
 	// 失败：未知 modelID → 错误。**不得回落成默认名或原样透传**：调用到一个
 	// 语义不同但名字相近的模型，账单和输出都会变，而请求本身没有任何异常迹象。

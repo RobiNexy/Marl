@@ -104,7 +104,7 @@ type Pricing struct {
 // ModelEntry 是模型目录里的一条（Part 10.4，纯数据）。
 //
 // 不变量：ID / Provider / RemoteName 非空，Wire.Valid()。
-// RemoteName 非空尤其重要：它是真正发给厂商的名字（如 "deepseek-chat"），
+// RemoteName 非空尤其重要：它是真正发给厂商的名字（如 "deepseek-flash"），
 // 与内部 ID（"deepseek/chat"）是两个命名空间；为空会让适配器的 ModelName
 // 无处可查，只剩"猜一个"这条路。
 type ModelEntry struct {

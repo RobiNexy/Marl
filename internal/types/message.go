@@ -115,9 +115,18 @@ func (a Audience) Valid() bool {
 // LogEntry.TokenActual 与 Outcome.Usage 用 *TokenUsage 而非值类型的原因。
 // 混淆二者会让报表把"未统计"算成"免费的 0"，污染成本决策。
 //
-// [待验证: PromptTokens 的口径是"输入总量"还是"未命中缓存的输入量"——
-// 各厂商对 prompt_tokens 是否含 cache_hit 的定义并不一致。阶段 1 探测用例
-// 必须以实测数据钉死这一点，否则 CacheRead 会被重复计费。]
+// 口径（**已实测钉死**，2026-09-12 阶段 1 探测；依据见
+// docs/design/probe-report-phase1.md §1 假设 4 与 §4 结论 4）：
+//   - PromptTokens 是**输入总量（含命中缓存的部分）**，即
+//     prompt_tokens = prompt_cache_hit_tokens + prompt_cache_miss_tokens
+//     （实测例：923 = 768+155、1212 = 1024+188；探测报告 §1 假设 4 有三例）。
+//     因此 CacheReadTokens ⊆ PromptTokens，计费公式必须是
+//     (PromptTokens-CacheReadTokens)*InPerMTok + CacheReadTokens*CachedInPerMTok；
+//     把 CacheReadTokens 再加到 PromptTokens 上会重复计费；
+//   - CacheWriteTokens 在 DeepSeek 隐式缓存下**恒为 0**：厂商不单独上报/计费写入量
+//     （未命中的输入本身就是"写"的那部分，它已经算在 PromptTokens 里）。
+//     这与"未统计"不可区分，是本结构的已知局限；消费侧需要未命中量时用
+//     PromptTokens-CacheReadTokens 推导，不要读 CacheWriteTokens。
 type TokenUsage struct {
 	PromptTokens     int // 输入总量
 	CompletionTokens int // 可见输出

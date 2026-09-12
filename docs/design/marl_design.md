@@ -309,7 +309,7 @@ type LogEntry struct {
 }
 
 type TokenUsage struct {
-    PromptTokens     int  // 输入总量（口径需实测确认是否含缓存命中）
+    PromptTokens     int  // 输入总量（实测：**含**缓存命中，= hit + miss，见探测报告 §1）
     CompletionTokens int  // 可见输出
     ReasoningTokens  int  // 思维链，独立计费（检测"刷思维链"的关键）
     CacheWriteTokens int  // 写缓存（约为未命中输入的 1.25 倍价）
@@ -483,6 +483,11 @@ Transient 的审计：它不进 Log，但"第 12 轮追加过一次格式纠偏"
 压缩是框架自动触发的编排操作（不是 LLM 主动调用的工具）：
 
 **触发条件**：`headroom < threshold`（headroom = model_max_tokens - current_context - budget_reserved）
+
+**注意（深度轮实测，见探测报告 §3.10）**：`model_max_tokens` 与 token 计数都是**按模型**的——
+`deepseek-v4-pro` 与 `deepseek-flash` 对**同一份字节**报出的 `prompt_tokens` 差 53（1033 vs 980），
+即两者 tokenizer 不同。因此 headroom 必须用**当前绑定模型**的口径计算，不能跨模型复用估算值
+（换了模型后旧的估算值一律作废，见 §10.6 的"token 估算标记为 stale"）。
 
 **执行流程**：
 
@@ -886,6 +891,11 @@ type SamplingParams struct {
     TimeoutMs   int64   `yaml:"timeout_ms"`  // 默认 1800000（30 分钟）
 }
 
+// 采样参数在**思考模式下会被厂商改写或忽略**（实测文档，探测报告 §2）：
+// DeepSeek 的 temperature 在思考模式下不生效；top_p 在思考模式下 <0.95 会被抬升到 0.95，
+// 非思考模式下恒为 1.0（传入值被忽略）。因此"我设了采样参数"不等于"厂商会照用"——
+// 需要确定性的场景只能靠 prompt 约束，不能靠 temperature=0（而零值在本契约里=不发送）。
+
 type ThinkingSpec struct {
     Level   string         `yaml:"level"`    // 模型原生档位名（字符串），不全局枚举
     Budget  *int           `yaml:"budget"`   // budget 控制模式的 token 预算（如 Anthropic）
@@ -922,7 +932,7 @@ type ContextPolicy struct {
 
 **关键设计原则（Patch 1 重设计）**：
 
-- **档位不再是整数，也不全局枚举。** `Level` 是字符串，用模型原生名字（`"off"` / `"low"` / `"medium"` / `"high"` / `"on"` 等）。未来某模型加 10 挡，直接改 `models.yaml` 里的 `thinking_levels` 即可，框架代码对挡位数完全无感。
+- **档位不再是整数，也不全局枚举。** `Level` 是字符串，用模型原生名字（DeepSeek 现行是 `"none"` / `"low"` / `"high"` / `"max"`，Anthropic 是 `"off"` / `"any"`；框架自己的开关词是 `"off"` / `"on"`，由 Normalizer 按 `ThinkingControl` 翻译，见 ADR-0020）。未来某模型加 10 挡，直接改 `models.yaml` 里的 `thinking_levels` 即可，框架代码对挡位数完全无感。
 - **档位是模型属性，不是全局属性。** 同一套 `ThinkingSpec` 在不同模型上解析出不同的实际档位，由 Normalizer 按 `ModelCaps.ThinkingLevels` 翻译（见 Part 10.10）。
 - `Enabled` / `MaxThinkTokens` 被拆掉：`Enabled` 等价于 `Level == "off"`；`MaxThinkTokens` 只对 budget 控制模型有意义，即 `Budget` 字段。
 
@@ -936,7 +946,7 @@ type ContextPolicy struct {
 
 **① Profile 不点名模型**
 
-`Requirement` 只说"我需要 tool_call 能力"、"我偏好 thinking"，不说"用 deepseek-reasoner"。绑定由 Router 从阶梯里选（Part 10 详述）。这让阶梯升级成为可能——如果 Profile 钉死 model_id，阶梯就没得升。
+`Requirement` 只说"我需要 tool_call 能力"、"我偏好 thinking"，不说"用 deepseek-v4-pro"。绑定由 Router 从阶梯里选（Part 10 详述）。这让阶梯升级成为可能——如果 Profile 钉死 model_id，阶梯就没得升。
 
 **② AllowedSkills 是调用时校验，不影响 schema**
 
@@ -1102,7 +1112,7 @@ type SpawnRequest struct {
 ### 6.8 TimeoutMs 默认值的理由
 
 **默认 30 分钟**：
-- 思维模式开高深度时 LLM 可能想很久（Deepseek reasoner 最长可能到 10 分钟以上）
+- 思维模式开高深度时 LLM 可能想很久（DeepSeek 的思考档位下，单次等待可能远超普通对话）
 - 宁可等久也不要半途截断一个好答案
 - 真超时了说明任务太大，应拆分
 
@@ -1241,24 +1251,33 @@ type PromptEntry struct {
 
 ```yaml
 # ~/.config/marl/ladder.yaml（全局配置，所有项目共享）
+# 形状与 §10.6 的规范定义一致（endpoint + model + thinking）；
+# 模型名是 models.yaml 的内部 id，远端名随厂商更新（见探测报告 §2）
 ladder:
   - id: "r0"
-    adapter: "deepseek"
-    model_id: "deepseek-chat"
+    endpoint: "deepseek-main"
+    model: "deepseek/chat"           # → deepseek-flash
+    thinking: {level: "off"}
     description: "快速、便宜，适合探索与编排"
-    cost_per_mtok: 1.0   # 人民币 / 百万 token（输入，缓存未命中）
-  
+    cost_per_mtok: 1.0               # 仅用于排序，权威价格在 models.yaml 的 pricing
+
   - id: "r1"
-    adapter: "deepseek"
-    model_id: "deepseek-reasoner"
-    description: "思维深度，适合复杂推理"
-    cost_per_mtok: 4.0
-  
+    endpoint: "deepseek-main"
+    model: "deepseek/chat"           # 同一模型开思维：档位不在缓存键内，前缀部分保留
+    thinking: {level: "high"}
+    description: "同模型开思维，缓存部分保留"
+
   - id: "r2"
-    adapter: "anthropic"
-    model_id: "claude-sonnet-4.6"
-    description: "稳定强悍，适合关键任务"
-    cost_per_mtok: 20.0
+    endpoint: "deepseek-main"
+    model: "deepseek/v4-pro"         # → deepseek-v4-pro：换 model_id，缓存重建
+    thinking: {level: "high"}
+    description: "更强模型，适合复杂推理"
+
+  - id: "r3"
+    endpoint: "anthropic-main"
+    model: "anthropic/sonnet-4.6"
+    thinking: {level: "on", budget: 4096}   # budget 控制模型（ThinkControlBudget）语法
+    description: "换厂商，缓存重建"
 ```
 
 项目的 `config.yaml` 只配起始级：
@@ -1391,6 +1410,12 @@ Reconfigure 换 `model_id` 或 `adapter` 会让之前积累的缓存全部失效
 **处理**：换模型时把失效前的缓存统计记入 `model_switch` 审计——`cache_invalidated: {cache_hits_before, cache_writes_before}`。`cache_hits_before` 代表"已经摊销掉的缓存价值"，失效后要重新摊销。
 
 **关键区分**：**只调 temperature/top_p 等采样参数、不换 `model_id`/`adapter`，缓存不受影响**（缓存键是前缀内容，采样参数不在键内），应原地更新、不记 `model_switch`、不触发缓存失效。
+
+**已实测确认（探测报告 §3.10，两轮复现）**：换 `model_id` **确实**让缓存全废——另一个模型对
+刚建立的新前缀 `cached_tokens=0`（厂商缓存键含模型名）。所以本节的成本提示不是保守估计：
+"先用便宜档热身、再升到贵档"**不会**省下贵档的输入成本（贵档必须重算整个前缀）。
+另外两个模型的 tokenizer 不同（同一份字节 `prompt_tokens` 差 53）→ 换模型后**必须**重估
+（§10.6 的 stale 标记是硬要求）。
 
 成本提示：`request_reconfigure` 的 tool 描述里带缓存失效提示，`model_switch` 审计里也带——让决策者（人类/LLM）知情。
 
@@ -2052,19 +2077,23 @@ const (
 
 ```yaml
 # ~/.config/marl/models.yaml（机器级，跨项目共享）
+# 注：远端名随厂商更新。DeepSeek 现行模型是 deepseek-flash / deepseek-v4-pro；
+# 旧版的 deepseek-chat / deepseek-reasoner 已不存在（探测报告 §2）。max_context /
+# max_output 是**待核实**值：厂商文档只给了 max_tokens 上限与默认输出（1~384K；
+# 默认 8K 非思考 / 64K 思考 / 128K max 档），上下文长度在"模型与价格"页（未快照）。
 models:
   - id: "deepseek/chat"
     provider: "deepseek"
     wire: "openai_chat"
-    remote_name: "deepseek-chat"
+    remote_name: "deepseek-flash"
     caps:
       has: [tool_call, thinking, json_mode]
-      max_context: 65536
-      max_output: 8192
+      max_context: 65536            # 待核实（探测报告 §3.3）
+      max_output: 8192              # 待核实
       cache_mode: "implicit_prefix"  # 隐式前缀缓存
       unsupported_params: []
-      thinking_control: "bool"       # 仅开关
-      thinking_levels: ["off", "on"]
+      thinking_control: "level"      # 现行 API：顶层 reasoning_effort
+      thinking_levels: ["none", "low", "high", "max"]   # 默认 high
     pricing:
       in_per_mtok: 1.0
       cached_in_per_mtok: 0.14
@@ -2072,18 +2101,18 @@ models:
       reasoning_per_mtok: 2.0
       currency: "CNY"
 
-  - id: "deepseek/reasoner"
+  - id: "deepseek/v4-pro"
     provider: "deepseek"
     wire: "openai_chat"
-    remote_name: "deepseek-reasoner"
+    remote_name: "deepseek-v4-pro"
     caps:
       has: [tool_call, thinking, json_mode]
-      max_context: 65536
-      max_output: 8192
+      max_context: 65536            # 待核实
+      max_output: 8192              # 待核实
       cache_mode: "implicit_prefix"
       unsupported_params: []
-      thinking_control: "bool"
-      thinking_levels: ["off", "on"]
+      thinking_control: "level"
+      thinking_levels: ["none", "low", "high", "max"]
     pricing:
       in_per_mtok: 4.0
       cached_in_per_mtok: 0.56
@@ -2122,7 +2151,11 @@ models:
   - `none`：不支持缓存
 - `unsupported_params`：API 不接受的采样参数（Normalizer 需剔除）
 - `thinking_control`：思维控制方式——`bool`（仅开关）/ `level`（离散档位）/ `budget`（连续 token 预算），见 Part 6.3
-- `thinking_levels`：该模型支持的档位列表（字符串）。挡位数完全由这里决定，框架代码对挡位无感（Patch 1 重设计）
+- `thinking_levels`：该模型支持的档位列表（字符串）。挡位数完全由这里决定，框架代码对挡位无感（Patch 1 重设计）。
+  **它只声明"哪些档位可用"，不声明强度或成本**——阶段 1 实测（探测报告 §3.8 → ADR-0025）：两次各 3 次的
+  运行给出的档位强度均值序**相反**（`low`/`high` 谁更强不稳定），同档位极差是档位间差值的 5~18 倍。
+  因此成本模型不能按档位定值（`reasoning_per_mtok` 只能给量级），框架也**不**提供"用低档位省钱"
+  这类旋钮——档位是**能力**开关，不是成本旋钮
 - `vision_detail`：是否支持图片 detail 档位（low / high / auto），配合 `CapVisionDetail`
 
 ### 10.5 接入点配置
@@ -2168,14 +2201,14 @@ ladder:
   - id: "r1"
     endpoint: "deepseek-main"
     model: "deepseek/chat"
-    thinking: {level: "on"}
-    description: "同模型开思维，缓存部分保留"
+    thinking: {level: "high"}
+    description: "同模型开思维，缓存部分保留（档位不在缓存键内）"
 
   - id: "r2"
     endpoint: "deepseek-main"
-    model: "deepseek/reasoner"
-    thinking: {level: "on"}
-    description: "推理模型，换 model_id，缓存重建"
+    model: "deepseek/v4-pro"
+    thinking: {level: "high"}
+    description: "更强模型，换 model_id，缓存重建"
 
   - id: "r3"
     endpoint: "anthropic-main"
@@ -2187,6 +2220,16 @@ ladder:
 **thinking 开关在阶梯级别，不在 model 定义里**。同一个 model 开不开思维是两级——这正是你的核心需求：先用关思维的强模型，卡住了给它开思维，还卡住了才换模型。
 
 档位是**字符串 + 模型相关**（Patch 1）：`level` 的值必须在对应模型的 `thinking_levels` 里，写错由 Normalizer 记 `DegradThinkingLevel` 降级而不是崩溃。budget 控制模型（如 Anthropic）不填 `budget` 时由模型默认行为决定。
+
+**唯一真相是 `Binding.Thinking`（ADR-0022，阶段 1 探测 §3.1 的裁决）**：档位配在**阶梯**上，
+装配层把它拷进 `CanonicalRequest.Thinking`，Normalizer 侧再加一层保险——`req.Thinking` 为空时
+**回退**读 `binding.Thinking`，两处都非空且不同时**报错**（框架错误，不发请求）。
+这条保险是刻意的：它让"档位配了却不生效"这类**静默失效**在结构上不可达。
+
+**落地缺口（阶段 2 第一件事）**：当前 `internal/wire` 的 `build()` **只读**
+`CanonicalRequest.Thinking`，全项目没有任何代码读 `Binding.Thinking`——照现状装配请求，
+阶梯上的档位配置会**完全无效**（请求照发、`reasoning_effort` 缺席、走厂商默认档位
+——实测默认是 `high`）。实现清单与测试计划见 ADR-0022。
 
 项目配置只说起始级：
 
@@ -2232,6 +2275,14 @@ project:
 
 **亲和性这条很关键**：换模型 = 缓存键空间切换 = 之前积累的缓存全废。所以 Binding 在 TaskSlot 开始时决定一次，全程复用，只在失败或显式 Reconfigure 时重绑。失败切换要记审计，并把 token 估算标记为 stale（tokenizer 换了）。
 
+**已实测确认（深度轮用例 8，两轮复现；见探测报告 §3.10）**：这两句话都有实测支撑——
+`deepseek-v4-pro` 建立的新前缀（`cached=0` 前提成立）**不被** `deepseek-flash` 命中
+（`cached=0`）→ 缓存键**含模型名**，换模型必然重算整个前缀，升级成本按**全量输入**估；
+且两个模型的 tokenizer 不同（**同一份字节**：v4-pro 报 `prompt_tokens=1033`、flash 报 `980`，
+差 53）→ "token 估算标记为 stale"不是保守估计，而是**必须**（估算与窗口裁剪都要带 model 维度）。
+顺带：`deepseek-v4-pro` 的 `reasoning_effort=high` 同样生效（返回非空 `reasoning_content`），
+因此阶梯上的档位配置对两个模型都成立。
+
 ### 10.8 Binding 的数据结构
 
 ```go
@@ -2249,7 +2300,7 @@ type Binding struct {
 }
 ```
 
-`CacheBucket` 是**请求级缓存隔离键**（见 10.15）：每次 LLM 请求的 `user` 字段=它，把不同 Agent 的缓存桶分开。`CachePrefix` 是模型级键（model_id + endpoint），两者组成完整缓存键：`前缀内容 + model_id + cache_bucket`。
+`CacheBucket` 是**请求级缓存隔离键**（见 10.15）：每次 LLM 请求的 `user_id` 字段=它，把不同 Agent 的缓存桶分开（实测桶隔离：不同 `user_id` 不共享前缀缓存）。`CachePrefix` 是模型级键（model_id + endpoint），两者组成完整缓存键：`前缀内容 + model_id + cache_bucket`。
 
 `Degraded` 记录了 Prefer 里要的但没拿到的能力。如果 Requirement 是 `Prefer: [thinking, vision]` 但绑到的模型只有 thinking，`Degraded = [vision]`。这个信息进审计，不阻断——Prefer 是"有更好，没有也行"。
 
@@ -2265,9 +2316,9 @@ type Binding struct {
 | :-- | :-- | :-- |
 | 多条 system | `first_only_rest_as_user` / `concat_all` / `prepend_concat` | Anthropic 只认第一条，Deepseek 全拼 |
 | 连续同角色 | `merge_with_separator` / `interleave_empty` / `keep_as_is` | 严格交替协议需插空 assistant |
-| 尾部 assistant（prefill） | `native_prefill` / `demote_to_tail_hint` / `drop` | Deepseek beta 端点支持，reasoner 需实测 |
+| 尾部 assistant（prefill） | `native_prefill` / `demote_to_tail_hint` / `drop` | DeepSeek 的 prefill 是 **Beta**：必须用 `base_url=https://api.deepseek.com/beta`，且最后一条消息 role 必须是 `assistant` 并带 `"prefix": true`。正式端点上的行为**未实测**，阶段 1 按 `demote_to_tail_hint` 保守处理 |
 | tool_result 承载 | `native_tool_role` / `inline_as_user` | OpenAI 兼容有 tool role，其他可能没有 |
-| 历史思维链 | `native_field` / `strip` / `inline_tagged` | Deepseek 的 reasoning_content 单独字段 |
+| 历史思维链 | `native_field` / `strip` / `inline_tagged` | DeepSeek 的 `reasoning_content` 是**独立字段**，且**回传规则取决于有没有 tools**：带 `tools` 时历史轮次的 `reasoning_content` **应当回传**（会被拼进上下文）；不带 `tools` 时**不需要回传**（传了也被忽略）。见探测报告 §2 第 11 条。**已裁决（ADR-0023）**：带 `tools` 默认**全量回传**、不带 `tools` 不发送。实测补充（§3.6，两轮复现）：四种形态（全量 / 只最近一轮 / 不回传 / 空串）**都返回 200**——"均应回传"是期望而非硬校验；回传内容确实进上下文（`prompt_tokens` 差 `+92` / `+38`，恰等于思维链的 token 数）；不带 tools 时带与不带的 `prompt_tokens` **完全相等**（确实被忽略）。**落地缺口**：框架当前**没有**承载历史思维链的字段（`Segment`/`WireMessage`/编码器都没有），阶段 2 必须先补通路 |
 
 伪代码：
 
@@ -2561,13 +2612,17 @@ func (r *Router) Bind(req Requirement, agentID AgentID) Binding {
 }
 ```
 
-**Wire 层**：缓存桶通过请求的 `user` 字段落地（不是 CachePrefix，它在模型级键里）：
+**Wire 层**：缓存桶通过请求的 `user_id` 字段落地（不是 CachePrefix，它在模型级键里）。
+
+字段名是**实测确认**的：官方 `chat-complete.html` 的请求参数是 `user_id`（字符集
+`[a-zA-Z0-9\-_]`、最大长度 512），并且明确写着"`user_id` 可用于 KVCache 缓存隔离，
+以进行隐私管理"。设计文档早期写的 `user` 是错的（探测报告 §2 第 2 条）。
 
 ```go
 type DeepseekChatRequest struct {
     Model    string
     Messages []ChatMessage
-    User     string    `json:"user,omitempty"`  // 永远 = binding.CacheBucket
+    UserID   string    `json:"user_id,omitempty"`  // 永远 = binding.CacheBucket
 }
 ```
 
@@ -2586,10 +2641,35 @@ endpoints:
 
 **隐含代价**：父子 Agent 各自的 system + tools 段虽然内容相同但缓存键不同，**N 个 Agent 重复存储 N 次公共段**。这是"正确性优先"的取舍——桶的策略一旦可配，缓存命中率就变成需要到处调优的不确定项。
 
-**待实测优化：全局公共桶**。tool schema 全项目统一，理论上应该共享缓存。需实测：
-- 不同 `user_id` 是否共享前缀缓存（Deepseek / Anthropic 答案可能不同）
-- 若支持：daemon 启动时打"热身请求"（`user="marl-global-schema"`，内容 = system + tools），让公共前缀进公共桶，N 个 Agent 共享
-- 若不支持：接受代价，跨 Agent 的 tool schema 缓存独立存储
+**已实测否决：全局公共桶**（阶段 1 探测，见 `docs/design/probe-report-phase1.md` §1.1）。
+原设想是：tool schema 全项目统一，理论上应该共享缓存，于是 daemon 启动时打"热身请求"
+（`user_id="marl-global-schema"`，内容 = system + tools）让公共前缀进公共桶，N 个 Agent 共享。
+
+实测结论：**桶是隔离的**（不同 `user_id` 不共享前缀缓存），方案不成立。证据链（三轮同向）：
+
+- 探测用例 6a/6b：本桶用一个**本轮全新**的前缀（前缀里带每次运行都不同的 nonce，工具强制
+  校验"本桶 cached_tokens=0"作为结论可归因的前提），另一个桶发**逐字节相同**的请求 →
+  `cached_tokens=0`；
+- 官方文档明说 `user_id` 就是用来做 KVCache 缓存隔离的；
+- 同一份代码在"另一个桶是全新状态"时的观测与上述一致。
+
+**代价照单接受**：跨 Agent 的 tool schema 缓存独立存储（N 个 Agent 重复存 N 份公共段）。
+这是"正确性优先"的既定取舍——桶一旦可配，命中率就变成需要到处调优的不确定项。
+
+**缓存单元的端点间隔（深度轮实测，见探测报告 §3.9 / ADR-0024）**：隐式前缀缓存的单元端点
+间隔实测为 **128 token**（截断扫描：`cached` 的台阶 768 → 896 → 1024，跳幅恒为 128），
+但 **`cached_tokens` ≠ `floor(prompt_tokens / 128) * 128`**——残差实测最大 250 token。
+命中长度取决于厂商**实际落盘了哪些单元端点**（`cache.html` 的三种落盘时机：请求结束位置 /
+公共前缀检测 / 按固定 token 间隔），不是均匀网格。
+
+**因此不做"把冻结前缀补齐/裁剪到 128 的倍数"这类优化**：它看起来显然、实测无效，还会为了
+一个无效目标去改动冻结前缀的字节（那是全项目缓存的地基）。前缀策略仍按 §10.3：
+`frozen` 段 byte-stable、`volatile` 只在尾部、命中率用
+`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 分开统计。
+
+**留待以后重估**：若某厂商提供跨桶共享（或 `user_id` 语义变化），再评估热身请求；届时的
+探测必须沿用"nonce 前缀 + 前提校验"的形态，否则会得到不可归因的结论（同一套用例曾因为
+沿用固定前缀而在两轮里给出相反结论）。
 
 这条必须在**阶段 1** 就测（见路线图 13.3）——否则后面测到的命中率都是错误桶口径下的。
 
@@ -3302,9 +3382,35 @@ experimental    刚 promote 上来、还没在第二个项目验证过的
 
 ### 13.3 阶段 1：Wire 实现 + 模型探测
 
-**目标**：能调通 Deepseek 的 chat/reasoner 两个端点，拿到正确的 `TokenUsage`，验证缓存机制。
+**目标**：能调通 DeepSeek 的 `openai_chat` 线路，拿到正确的 `TokenUsage`，验证缓存机制。
 
 **为什么这是第一步**：整个框架的经济性建立在"缓存命中率高"之上。如果缓存机制实测不符合假设（如前缀抖动、跨请求不共享、TTL 太短），后面的所有设计都要调整。**越早验证假设越好。**
+
+**阶段 1 已完成**（2026-09-12，**7 轮真跑** = 基础轮 1~4 + 深度轮 5~6 + 复核轮 7）：结论与假设裁决见
+`docs/design/probe-report-phase1.md`，逐字节请求体与厂商原始响应见
+`probe-run-record-phase1.md`（基础轮）、`probe-run-record-phase1-deep.md`（深度轮，含 10 分钟 TTL）、
+`probe-run-record-phase1-contract.md`（契约探测复现）、`probe-run-record-phase1-deep2.md`（复核轮，
+同命令重跑：用例 7~10 与 TTL 逐位复现，档位均值序被推翻）。编码审阅见
+`docs/design/code-review-phase1.md`。
+
+要点：
+
+- 缓存命中 79.8%（963 输入中 768 命中）、跨进程共享、**TTL ≥ 10 分钟**；
+- 桶隔离（`user_id`）→ "全局公共桶"方案否决（ADR-0021）；
+- thinking 四档 `none/low/high/max` **都生效**（`none` 恒无 `reasoning_content`）；但档位**强度序
+  不稳定**——两次各 3 次的运行均值序相反（轮 5 单调、轮 7 不单调），同档位极差是档位间差值的
+  5~18 倍 → `thinking_levels` 只声明**可用性**，不声明强度或成本（ADR-0025）；
+- **缓存单元端点间隔 128 token**（台阶跳幅恒为 128），但 `cached ≠ floor(prompt/128)*128`
+  → 否决"前缀对齐到单元倍数"的优化（ADR-0024）；
+- **跨模型缓存隔离**且两个模型 tokenizer 不同（同一份字节差 53 token）→ 阶梯升级按全量输入估、
+  token 估算必须带 model 维度；
+- 历史 `reasoning_content`：带 `tools` 时四种回传形态都被接受、回传内容确实进上下文
+  （`+92` / `+38` token）；不带 `tools` 时确实被忽略 → **裁决：带 tools 全量回传、不带 tools 不发送**
+  （ADR-0023）；
+- 厂商 API 已更新（模型名、桶字段、thinking 控制方式、usage 主字段），设计文档相关段落已按实测修正；
+- **三条裁决**（ADR-0022 档位唯一真相 = `Binding.Thinking`；ADR-0023 历史思维链策略；
+  ADR-0025 档位只声明可用性）已记录，前两条的**落地缺口**（无拷贝规则、无思维链通路）
+  列为阶段 2 的头两项任务。
 
 具体任务：
 
@@ -3313,8 +3419,9 @@ experimental    刚 promote 上来、还没在第二个项目验证过的
   - internal/wire/deepseek_chat.go
     实现 WireAdapter 接口（Execute 方法，返回 WireTurn）
     POST https://api.deepseek.com/v1/chat/completions
-    请求带 user=<binding.CacheBucket>（见 10.15 缓存桶）
-    解析 usage 字段（含 prompt_tokens_details.cached_tokens）
+    请求带 user_id=<binding.CacheBucket>（见 10.15 缓存桶；字段名是 user_id，不是 user）
+    解析 usage 字段（主字段 prompt_cache_hit_tokens / prompt_cache_miss_tokens；
+      prompt_tokens_details.cached_tokens 是同值别名，两个都读）
 
   - internal/wire/normalizer.go
     OpenAI 兼容协议的 Normalize 实现
@@ -3334,7 +3441,9 @@ experimental    刚 promote 上来、还没在第二个项目验证过的
       3. 带 tools（验证 tool_call）
       4. 开 thinking（验证 reasoning_content 存在；按 thinking_levels 逐档位验证）
       5. JSON mode（验证 response_format）
-      6. 同前缀但不同 user=<bucket>（验证缓存桶隔离与共享，见 10.15）
+      6. 同前缀但不同 user_id=<bucket>（验证缓存桶隔离与共享，见 10.15）
+         注：必须用**本轮全新**的前缀（前缀带 nonce），并先确认"本桶 cached_tokens=0"，
+         否则上一次运行留下的副本会让结论不可归因（探测报告 §1.1 记录了两次相反结论的教训）
   
     每个请求打印：
       - 发送的消息数组（JSON）
@@ -3345,7 +3454,7 @@ experimental    刚 promote 上来、还没在第二个项目验证过的
       - 请求 2 的 cached_tokens > 0
       - 跨请求缓存共享（重启进程再发一遍，仍命中）
       - thinking 返回 reasoning_content 字段且非空（每个档位）
-      - 请求 6 结果写进报告：不同 user 是否共享前缀缓存（决定"全局公共桶"是否可行，10.15）
+      - 请求 6 结果写进报告：不同 user_id 是否共享前缀缓存（决定"全局公共桶"是否可行，10.15）
 
 测试（关键）：
   - TestNormalizerByteStability
@@ -3365,16 +3474,53 @@ experimental    刚 promote 上来、还没在第二个项目验证过的
   - Profile / namespace
 ```
 
-**交付检查**：`go run cmd/probe` 输出各次请求的结果，第二次的 `cached_tokens` 大于零，重启进程再跑一遍仍然命中缓存。这证明 Deepseek 的隐式前缀缓存按预期工作。请求 6 的观测结果记录在探测报告里（缓存桶口径）。
+**交付检查**（✅ 阶段 1 已通过）：`go run cmd/probe` 输出各次请求的结果，第二次的 `cached_tokens` 大于零（实测 768/963），重启进程再跑一遍仍然命中缓存（用例 1/2 跨进程仍 `cached=768`）。这证明 Deepseek 的隐式前缀缓存按预期工作。请求 6 的观测结果记录在探测报告里（缓存桶口径：**隔离**，全局公共桶方案否决）。
 
-**实测要验证的假设**（写进探测报告）：
-- 缓存键 = 前缀内容，采样参数不在键内（改 temperature 不破缓存）
-- 缓存跨请求共享（不是单次会话）
-- 缓存 TTL > 5 分钟（两次请求间隔 5min 仍命中）
-- `prompt_tokens` 的口径（是否包含 cached_tokens）
-- 缓存桶 user_id 口径：不同 user_id 是否共享前缀缓存（Deepseek / Anthropic 答案可能不同；决定 10.15 的"全局公共桶"热身请求方案是否可行）
+**实测要验证的假设**（写进探测报告；✅/❌/⏳ 为阶段 1 实测结果）：
+
+- ⏳ 缓存键 = 前缀内容，采样参数不在键内（改 temperature 不破缓存）——**未验证**：
+  `SamplingParams` 是值类型，`temperature=0` 发不出去（探测报告 §3.2）
+- ✅ 缓存跨请求共享（不是单次会话）——跨**进程**也共享：重跑时用例 1/2 仍命中
+- ✅ 缓存 TTL > 5 分钟（**深度轮把下界推到 10 分钟**：间隔 10m0s 仍 `cached=768`；上界未测）
+- ✅ `prompt_tokens` 的口径：**包含** cached——`prompt_tokens = hit + miss`（三例全等）。
+  成本核算必须用 hit/miss 分开算，不能用 `prompt_tokens` 乘单价
+- ❌ 缓存桶 `user_id` 口径：不同 `user_id` **不共享**前缀缓存 → 10.15 的"全局公共桶"热身
+  请求方案**否决**（隔离是厂商文档承诺的行为）
+- ✅（新增）前缀缓存**从第 1 个 token 起算、按单元对齐**：前缀第一个 token 变了就零命中
+- ✅（新增）thinking 四档 `none/low/high/max` 都生效（`none` 恒无 `reasoning_content`）；
+  **但档位强度序不稳定**：两次各 3 次的运行均值序相反（轮 5 `low` 830 < `high` 955 < `max` 1054；
+  轮 7 `low` 775 **>** `high` 725），同档位极差（417~688）是档位间差值的 5~18 倍
+  → `thinking_levels` 只声明可用性；单次采样（甚至一次 3 次重复）都会给出相反的假象
+  （探测报告 §3.8）
+- ✅（深度轮新增）**缓存单元端点间隔 = 128 token**；但 `cached ≠ floor(prompt/128)*128`
+  （残差最大 250）→ 不做"前缀对齐到单元倍数"的优化（ADR-0024）
+- ❌（深度轮新增）**跨模型缓存共享**：不共享（缓存键含模型名）→ 阶梯升级必然重算前缀；
+  且两个模型 tokenizer 不同（同一份字节差 53 token）→ token 估算必须带 model 维度
+- ✅（深度轮新增）带 `tools` 时历史 `reasoning_content` **四种回传形态都被接受**，且回传内容
+  确实进上下文（`prompt_tokens` `+92`/`+38`）；不带 `tools` 时确实被忽略（`prompt_tokens` 相等）
+  → 裁决见 ADR-0023
+- ✅（深度轮新增）跨轮重复 `tool_call` id **被厂商接受**（不报 400）→ 断言层必须显式表态
+  （给合成 id 加轮次区分度，或写明刻意放过；探测报告 §3.11）
 
 **如果这一步发现缓存假设不成立**（如 TTL 只有 1 分钟、跨请求不共享），立即暂停，重新评估设计——这比写到一半再发现强。
+
+**阶段 1 对设计文档的改动清单**（本轮"审阅设计文档并把变动写入"的产物；每条都可回溯到
+`docs/design/probe-report-phase1.md` 的对应小节）：
+
+| 文档位置 | 改动 | 依据 |
+| :-- | :-- | :-- |
+| §6.3 `SamplingParams` | 加注：思考模式下 `temperature`/`presence_penalty`/`frequency_penalty` **设置不报错也不生效**，`top_p` 被抬升到 ≥0.95（非思考模式恒为 1.0）→ 确定性不能靠采样参数 | 探测报告 §2 第 9/12 条（官方文档） |
+| §7.1 / §10.6 阶梯 | 模型名改成现行（`deepseek-flash` / `deepseek-v4-pro`）；thinking 改成档位控制；**加**"换模型 = 缓存全废 + tokenizer 不同"的实测确认 | 探测报告 §2 第 1/3 条、§3.10 |
+| §7.7 换模型的缓存失效成本 | 由"预估"升级为"实测确认"（跨模型 `cached=0`） | 探测报告 §3.10 |
+| §10.4 模型目录 | 模型名、`thinking_control: level` + 四档；`max_context`/`max_output` 标成**待核实**（文档没给）；补 `ultra`→`max` 等别名不进档位表 | 探测报告 §2 第 1/3/5/13 条、§3.3、§3.7 |
+| §10.9 命名策略 | 历史思维链行补：带 tools 全量回传 / 不带 tools 不发送（ADR-0023）+ 落地缺口；prefill 行补"是 Beta 端点" | 探测报告 §2 第 11/14 条、§3.6 |
+| §3.7 压缩触发条件 | 补：headroom 必须按**当前绑定模型**的口径算（两个模型 tokenizer 不同） | 探测报告 §3.10 |
+| §10.15 缓存桶 | 字段名改 `user_id`；"全局公共桶"整段改为**实测否决**；补缓存单元 128 端点与"不做对齐优化"（ADR-0024） | 探测报告 §1.1、§3.9 |
+| §13.3 阶段 1 | 状态改为"7 轮真跑已完成"，补深度轮要点、假设表、复现命令、本改动清单 | 本报告全文 |
+| §10.6 档位语义 | 明确"档位只声明可用性，不声明强度/成本"（两次运行均值序相反，ADR-0025） | 探测报告 §3.8 |
+| 新增 `probe-run-record-phase1-deep2.md` | 复核轮 7 原始记录（同命令重跑：用例 7~10 与 TTL 逐位复现） | 探测报告 §3.8/§3.9 |
+| 新增 `code-review-phase1.md` | 阶段 1 编码审阅记录（3 条必修、已修的工具缺陷、复核确认清单） | 本次审阅 |
+| 新增 ADR-0021~0025 | 桶字段与隔离、档位唯一真相、历史思维链策略、缓存单元与不做对齐优化、档位不建模成本 | 探测报告 §1.1、§3.1、§3.6、§3.8、§3.9 |
 
 ### 13.4 阶段 2：单 Agent 的最小循环
 
@@ -3541,7 +3687,7 @@ experimental    刚 promote 上来、还没在第二个项目验证过的
   - 能力探测（probe）
 ```
 
-**交付检查**：配置 `ladder.yaml`（r0 = chat 关 thinking、r1 = chat 开 thinking、r2 = reasoner），`go run cmd/mini` 跑一个会失败的任务，观察到升级日志，`go run cmd/ladder_report` 输出分项成本。
+**交付检查**：配置 `ladder.yaml`（r0 = `deepseek/chat` 关 thinking、r1 = `deepseek/chat` 开 thinking、r2 = `deepseek/v4-pro`），`go run cmd/mini` 跑一个会失败的任务，观察到升级日志，`go run cmd/ladder_report` 输出分项成本。
 
 **这一步结束时**：阶梯机制闭环。Ledger 能看出"哪个阶梯花了多少钱"，能验证"升级是否真的省钱"。
 
@@ -3819,7 +3965,7 @@ experimental    刚 promote 上来、还没在第二个项目验证过的
 | 阶段 | 交付检查 | 通过标准 |
 | :-- | :-- | :-- |
 | 0 | `go build` 过，接口全定义 | 2000 行签名代码 |
-| 1 | `go run cmd/probe` 缓存命中 | 第二次请求 cached_tokens > 0 |
+| 1 | `go run cmd/probe` 缓存命中 | 第二次请求 cached_tokens > 0（✅ 已通过：768/963） |
 | 2 | `go run cmd/mini` 完成循环 | Log 里有完整 tool 链条 |
 | 3 | 触发压缩 | 新 View 比旧小 ≥20% |
 | 4 | 升级到 r1 | Ledger 记录两级消耗 |
@@ -3871,6 +4017,6 @@ Part 13 交付。路线图的关键特征：
 | 1 | 图片输入：`CapVisionDetail` / `CapImageGen`（进枚举 v1 不做）、`Segment.Attachments`、`Attachment`、`TokenUsage.ImageTokens`、Normalizer 协议翻译 | Part 3.2、Part 4.4、Part 6.3、10.3、10.10、10.14 |
 | 2 | Thinking 重设计：`ThinkingSpec` 字符串档位（`Level` / `Budget` / `Display`）、`ThinkingControl`、`ModelCaps.ThinkingLevels`、`DegradThinkingLevel`、`ThinkingOutcome`、`normalizeThinking()` | Part 6.3/6.5/6.9、Part 7.6、10.4/10.6/10.10/10.11 |
 | 3 | 混合工具调用：`WireTurn`（多 Outcome）、主循环 `handleWireTurn`、同 turn 工具顺序执行、差量续发 | Part 8.8、10.2、10.11、10.16、13.4 |
-| 4 | 每 Agent 独立缓存桶：`Binding.CacheBucket`（=AgentID）、请求 `user` 字段、删 `BucketStrategy`、`TestCachePrefix` 加缓存桶维度、阶段 1 探测用例 6 | Part 7.7、10.8、10.15、13.3 |
+| 4 | 每 Agent 独立缓存桶：`Binding.CacheBucket`（=AgentID）、请求 `user_id` 字段、删 `BucketStrategy`、`TestCachePrefix` 加缓存桶维度、阶段 1 探测用例 6 | Part 7.7、10.8、10.15、13.3 |
 
 **不触**：Log / View / 命名空间 / 分治 / 讨论 / 编排 / Ledger / 阶梯升级判据。
