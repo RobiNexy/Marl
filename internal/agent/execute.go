@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"marl/internal/orchestrate"
 	"marl/internal/proto"
 	"marl/internal/skill"
 	"marl/internal/types"
@@ -77,6 +78,13 @@ func (a *Agent) eventLoop(ctx context.Context) error {
 		a.mu.Unlock()
 		if esc {
 			return errEscalating
+		}
+		// Gate 审批挂起（Part 11.3 的 Blocked(AwaitingGate)）。
+		a.mu.Lock()
+		gateWaiting := a.gatePending != nil
+		a.mu.Unlock()
+		if gateWaiting {
+			return errGatePending
 		}
 		// 讨论进行中 → 阻塞等人类（Part 8.2 的 Blocked(Discussing)）。
 		// 位置在工具执行与"turn 结束"判定之后：annotation 恢复后的响应轮
@@ -237,6 +245,14 @@ func (a *Agent) executeToolCall(ctx context.Context, call types.ToolCall) error 
 	// 1. 授权（先确认能不能打，再找工具——错误面统一是结构化错误码）。
 	if err := a.authorizer.Authorize(ctx, a.id, call.Name); err != nil {
 		return a.appendToolEntry(ctx, call, skill.ResultFromAuthorizeError(err))
+	}
+	// 1.5 编排五件套走 ViewOps 面（agentViewOps.Execute 的结果已是
+	// map 形态：serde 成 SkillResult 的统一错误面协议；GATE_PENDING_HUMAN
+	// 已在 ViewOps 里挂到 gatePending → eventLoop 尾部 errGatePending）。
+	if isOrchSkill(call.Name) {
+		out := a.env.Orch.Execute(ctx, orchestrate.OpKind(call.Name), decodeOpSelector(call.Arguments), nil)
+		res := opResultToSkill(out)
+		return a.appendToolEntry(ctx, call, res)
 	}
 	// 2. 找技能（未注册也是"模型可见"的失败——技能名是模型拼写的，会拼错）。
 	s, err := a.skills.Get(call.Name)

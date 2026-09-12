@@ -18,6 +18,7 @@ const (
 	ToolRequestBranch      = "request_branch"      // → Spawner 裁决
 	ToolRequestDiscussion  = "request_discussion"  // → 开 Fossil 分支并进入讨论状态
 	ToolSpawnBatch         = "spawn_batch"         // → Spawner 批量裁决（阶段 9）
+	ToolLLMCall            = "llm_call"            // → 一次受控副调用（阶段 11 逃生舱）
 	ToolReportToParent     = "report_to_parent"    // → 报告完成，走机械检查
 )
 
@@ -30,11 +31,11 @@ const (
 var intentToolList = [...]string{
 	ToolSpawnSubagent, ToolRequestHuman, ToolRequestReconfigure,
 	ToolRequestBranch, ToolRequestDiscussion, ToolReportToParent,
-	ToolSpawnBatch,
+	ToolSpawnBatch, ToolLLMCall,
 }
 
 // IntentToolCount 是意图工具数量。
-const IntentToolCount = 7
+const IntentToolCount = 8
 
 // 编译期断言：列表与常量数量必须一致（阶段 9 加入 spawn_batch）。
 var _ [IntentToolCount - len(intentToolList)]struct{}

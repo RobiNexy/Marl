@@ -19,6 +19,7 @@ const (
 	CallMain          CostCategory = "main"          // 主任务的 Execute
 	CallOrchestration CostCategory = "orchestration" // 压缩、split 等编排调用（用 r0，不计入主任务预算）
 	CallDiscussion    CostCategory = "discussion"    // 人机讨论里的 Agent 起草（用 r0，单独核算）
+	CallLLMCall       CostCategory = "llm_call"      // llm_call 意图的 sidecar 调用（阶段 11；报表按 purpose 再分）
 )
 
 // Valid 报告 c 是否为三个已定义类别之一。零值返回 false。
@@ -26,7 +27,7 @@ const (
 // 并发：纯函数。
 func (c CostCategory) Valid() bool {
 	switch c {
-	case CallMain, CallOrchestration, CallDiscussion:
+	case CallMain, CallOrchestration, CallDiscussion, CallLLMCall:
 		return true
 	}
 	return false

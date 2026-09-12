@@ -106,6 +106,12 @@ func (r *Recorder) RecordOrchestration(ctx context.Context, taskID types.TaskID,
 	return r.recordFor(ctx, store.CallOrchestration, taskID, agentID, b, usage)
 }
 
+// RecordLLMCall 记一次 llm_call（Part 11.2 §2.8：call_type=llm_call；
+// 报表按 purpose 分组回答"编排到底花了多少"——查询，不是第二套账本）。
+func (r *Recorder) RecordLLMCall(ctx context.Context, taskID types.TaskID, agentID types.AgentID, b types.Binding, usage *types.TokenUsage) error {
+	return r.recordFor(ctx, store.CallLLMCall, taskID, agentID, b, usage)
+}
+
 // RecordDiscussion 记一次讨论起草（强制 CallDiscussion）。
 func (r *Recorder) RecordDiscussion(ctx context.Context, taskID types.TaskID, agentID types.AgentID, b types.Binding, usage *types.TokenUsage) error {
 	return r.recordFor(ctx, store.CallDiscussion, taskID, agentID, b, usage)

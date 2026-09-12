@@ -134,6 +134,26 @@ project:
 
 你是 Marl 框架的 Agent。按任务描述工作；需要分治时用 spawn_subagent。
 `,
+		// 阶段 11 的编排模板（Part 11.2 §2.11：编排 = 模板 + llm_call +
+		// View 操作；人类改文件就是改"编排"的语义，框架零改动。）
+		".marl/prompts/split-boundary.md": `# 拆分边界指令（split-boundary）
+
+任务：读以下一段内容，产出**互斥且全覆盖**的主题边界清单（JSON）。
+
+输出是 JSON 数组，元素字段为 topic / start_quote / end_quote：
+规则：
+  - 边界以原文引用定位（start/end 必须都能在原文中逐字找到）
+  - 无重叠、无缝隙（覆盖该内容全部范围）
+  - 禁切区：代码块、表格、URL 中的内容不切开
+`,
+		".marl/prompts/compress-skeleton.md": `# 压缩骨架（compress-skeleton）
+
+七段：标题 / 目标 / 任务现状 / 决策（含理由）/ 风险与坑 / 要点细节（含路径与 token 记录）/ 关键约束。
+`,
+		".marl/prompts/summarize.md": `# 通用摘要（summarize）
+
+读一段内容，返回不超过三句的摘要：任务、关键决策、未解问题。
+`,
 		// 知识目录的占位文件不用 .keep：fossil add 默认跳过 dotfiles
 		// （实测记录见测试报告阶段 6），README.md 语义也更清晰。
 		".marl/knowledge/contracts/README.md":   "# 契约\n接口契约放这里（Part 1.2 knowledge/contracts）。",

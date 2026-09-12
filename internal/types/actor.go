@@ -68,6 +68,7 @@ const (
 	BlockCompressing  BlockReason = "compressing"   // 上下文满，Orchestrator 在跑
 	BlockDiscussing   BlockReason = "discussing"    // 等人类审阅讨论草稿
 	BlockEscalating   BlockReason = "escalating"    // 向上求助，等上级/人类回复
+	BlockAwaitingGate BlockReason = "awaiting_gate" // Gate 审批挂起（Part 11.3，阶段 11）
 )
 
 // Valid 报告 b 是否为四个已定义挂起原因之一。零值返回 false（零值表示"未挂起"）。
@@ -75,7 +76,7 @@ const (
 // 并发：纯函数。
 func (b BlockReason) Valid() bool {
 	switch b {
-	case BlockWaitChildren, BlockCompressing, BlockDiscussing, BlockEscalating:
+	case BlockWaitChildren, BlockCompressing, BlockDiscussing, BlockEscalating, BlockAwaitingGate:
 		return true
 	}
 	return false

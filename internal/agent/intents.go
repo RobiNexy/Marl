@@ -41,6 +41,17 @@ const (
 		`"topic":{"type":"string","description":"Discussion topic for the human"},` +
 		`"draft":{"type":"string","description":"Your proposal to discuss"}},"required":["topic","draft"]}`
 
+	schemaLLMCall = `{"type":"object","properties":{` +
+		`"messages":{"type":"array","items":{"type":"object","properties":{` +
+		`"role":{"type":"string","enum":["system","user","assistant","tool"]},` +
+		`"content":{"type":"string"}},"required":["role","content"]}},` +
+		`"wire":{"type":"string","description":"main (live binding) or a configured sidecar name"},` +
+		`"model":{"type":"string","description":"optional catalog override"},` +
+		`"response_format":{"type":"string","enum":["text","json"]},` +
+		`"max_tokens":{"type":"integer"},` +
+		`"temperature":{"type":"number"},` +
+		`"purpose":{"type":"string","description":"bookkeeping label only (not authorization)"}},"required":["messages"]}`
+
 	schemaSpawnBatch = `{"type":"object","properties":{` +
 		`"items":{"type":"array","items":{"type":"object","properties":{` +
 		`"profile_id":{"type":"string","description":"Profile id of the child agent"},` +
@@ -66,5 +77,6 @@ func intentSchemas() []wire.ToolDef {
 		{Name: "request_branch", Description: "Request a version-control branch for a high-risk experiment.", Parameters: json.RawMessage(schemaRequestBranch)},
 		{Name: "request_discussion", Description: "Open a human discussion branch and pause until the human approves.", Parameters: json.RawMessage(schemaRequestDiscussion)},
 		{Name: "spawn_batch", Description: "Fork several children in one call. Use when subtasks are independent and parallelizable; results arrive as one batch of reports.", Parameters: json.RawMessage(schemaSpawnBatch)},
+		{Name: "llm_call", Description: "Send exactly ONE sidecar LLM call (no tools, no loops) for transformations you orchestrate yourself: splits, summaries, JSON structuring. Input cap and call budget apply; gate may ask the human.", Parameters: json.RawMessage(schemaLLMCall)},
 	}
 }

@@ -17,7 +17,7 @@ import (
 // [阶段 9 修正: proto 的冻结表里意图顺序是 spawn_subagent → report → human
 // → reconfigure → branch → discussion → batch（intentSchemas 的顺序即此）；
 // 报表的顺序以 proto 的 intentToolList 为准——金面按**当前实现**记录]。
-const goldenIntentSchemasJSON = `[{"name":"spawn_subagent"},{"name":"report_to_parent"},{"name":"request_human"},{"name":"request_reconfigure"},{"name":"request_branch"},{"name":"request_discussion"},{"name":"spawn_batch"}]`
+const goldenIntentSchemasJSON = `[{"name":"spawn_subagent"},{"name":"report_to_parent"},{"name":"request_human"},{"name":"request_reconfigure"},{"name":"request_branch"},{"name":"request_discussion"},{"name":"spawn_batch"},{"name":"llm_call"}]`
 
 // TestGoldenIntentSchemas：工具表的**顺序与名字**是缓存前缀的组成（字段
 // 层面的 schema 内容由 schema 常量的单点来源保障；这里守的是排列序，

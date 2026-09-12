@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"marl/internal/orchestrate"
 	"marl/internal/types"
 )
 
@@ -70,6 +71,11 @@ type SkillEnv struct {
 	// ControlPlaneRoot 是 ~/.local/state/marl/<project-id>/。
 	// 它不在任何 Agent 的 namespace 里（hidden），技能不得触碰。
 	ControlPlaneRoot string
+	// Orch 是编排技能的框架执行面（internal/orchestrate.ViewOps 的实现
+	// 由 Agent 装配；nil = 未装配——编排技能 Execute 时如实报失败而不是
+	// panic。技能不 import orchestrate 之外的逻辑：匹配/破坏分级/Gate 全在
+	// 执行面里（阶段 11 补遗 §3 的收口）。
+	Orch orchestrate.ViewOps
 	// Snapshots 是 mutating 技能的"写前快照"通道（Part 8.4 / 4.4 file_write）。
 	//
 	// 接口定义在消费侧（本包）并收窄到 Create 一个方法——这是快照在技能层的

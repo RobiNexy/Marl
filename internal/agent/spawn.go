@@ -106,6 +106,8 @@ func (a *Agent) executeIntent(ctx context.Context, call types.ToolCall) (*skill.
 		return a.intentRequestHuman(ctx, call)
 	case proto.ToolRequestReconfigure:
 		return a.intentRequestReconfigure(ctx, call)
+	case proto.ToolLLMCall:
+		return a.intentLLMCall(ctx, call)
 	default:
 		// 审计完整性（Part 4.1"一切结构性变更集中审计"的意图面：**所有**
 		// 意图裁决都有审计痕迹——包括"未被裁决关口处理"的如实拒绝）。
