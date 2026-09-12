@@ -100,6 +100,9 @@ func setupUpgrade(t *testing.T) (*Agent, *fakeLLM, *store.SQLiteStore, *ladder.C
 // golden 断言守住）。
 func testLadderCfg2() *ladder.Config {
 	return &ladder.Config{
+		Pricing: map[string]wire.Pricing{
+			"deepseek/chat": {InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"},
+		},
 		Ladder: &types.Ladder{
 			Rungs: []types.Rung{
 				{ID: "r0", Endpoint: "ep", Model: "deepseek/chat", CostPerMTok: 1.0, Currency: "CNY"},

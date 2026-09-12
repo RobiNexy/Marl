@@ -838,3 +838,74 @@ DeepSeek 的思维控制分布在请求体的**两个不同层级**上，这就�
 **依据**：`internal/spawner`/`internal/agent` 的测试矩阵（含 10 轮 -race
 fork 稳定性）、真机跑（`fork_test`：父 fork 子 → 子只读 report success →
 父汇总；含一次机械检查误降级的发现与修复）。
+
+---
+
+## ADR-0029：计价从 ladder.yaml 的 `pricing:` 节加载（按 model 四项分价）
+
+**状态**：Accepted（2026-09-12，阶段 4 交付后的定价修正；对应 Part 10.4）
+
+**决策**：
+
+1. 计价的权威来源是 **ladder.yaml 的 `pricing:` 节**（按 model id 键控），
+   四项分价：`in_per_mtok`（输入未命中）/ `cached_in_per_mtok`（输入缓存
+   命中）/ `out_per_mtok`（可见输出）/ `reasoning_per_mtok`（思维链），
+   全部每百万 token 单价 + currency。代码内不再有任何占位价格表。
+2. `StaticCatalog.Pricing` 读 `ladder.Config.Pricing`（NewRouter 注入，
+   单一来源）；`ModelEntry.Pricing` 字段保留（Part 10.4 契约形态）但不再
+   被 StaticCatalog 消费。
+3. `Rung.CostPerMTok` 保留为**排序粗价**（加权混合口径由配置者自定），
+   校验它落在 Pricing 的可行区间 [CachedIn, In+Out] 内——越界说明两个
+   价格表之一写错了（排序与记账的相对结论会相反）。
+4. 同一模型在任何档位同价（档位只切 thinking，不切价格）——rung 的
+   currency 必须与该 model 的 pricing currency 一致（一个模型一张价目表）。
+
+**理由**：原实现把占位价硬编码在 cmd/mini 的 buildCatalog 里——价格随
+厂商调整时需要改代码重编译；而 ladder.yaml 本来就是"成本分层"的配置
+载体，计价属于它。四项分价（而非单一均价）是成本公式的既定口径
+（ADR-0027 第 2 条）：缓存命中与思维链的单价差数倍，均价记账会让
+"缓存省了多少钱"与"思维链烧了多少钱"不可见。
+
+**回退代价**：回到代码内占位价，价格调整 = 改代码 + 全量重编译 + 重发版；
+回到单一均价，思维链占比与缓存收益从成本报表里消失。
+
+---
+
+## ADR-0030：Fossil 集成的六项实测裁决
+
+**状态**：Accepted（对应设计文档 13.8 / Part 8.4；2026-09-12 阶段 6 交付时记录）
+
+**决策**（每条都有 fossil 2.26 手工探测或真机依据）：
+
+1. **author 是三个框架用户**（human / agent / system），不是 "user:role"
+   字符串。`fossil commit -U <user>` 要求用户先 `fossil user new` 注册
+   （"no such user" 拒绝）；InitRepo 统一注册三个用户。Part 8.4 的
+   "author 按调用路径填" 落为 commit 调用点的常量（agent.doCommit 恒传
+   UserAgent——Agent 无法影响，原则 4）。
+2. **commit 带 `--no-verify-comment`**：fossil 默认对 comment 做
+   fossil-wiki 格式检查，`<tag>`/`&`/`[links]`/`_下划线_` 都是触发词——
+   commit message 是机器生成的结构化摘要（含子 report 文本片段），
+   wiki 误报是常态（真机实测：`<angle> brackets & wiki [links]` 直接被拒）。
+   timeline 的可读性不依赖 wiki 渲染。
+3. **`mtime-changes off`（仓库级设置）**：fossil 默认按 mtime 判定文件
+   变更，commit 后立即改文件（同一 mtime 粒度内）会被 `changes` 漏检
+   （真机实测：子写文件后父立即 commit，改动不可见）。off 后改用内容
+   校验和，本地仓库的代价可忽略。
+4. **Status = changes + extra 合并**：`fossil changes` 只列**已跟踪**
+   文件，新文件在 add 之前只出现在 `fossil extra` 里。单写者流程的第一步
+   （发现要提交什么）必须看两者。ignore-glob 在两层都生效（SKIP）。
+5. **fossil 的 add 是 checkout 级暂存区**（不是 per-goroutine）：并发
+   add+commit 时，先跑的 commit 会带走后 add 的文件，后跑的 commit 可能
+   nothing-to-commit（ErrNothingToCommit 哨兵的正确消费场景）。本包的
+   writeMu 串行化 + 单写者模型（父唯一提交点）让这条路径在框架内不发生。
+6. **不做 lockfile 退避重试**（13.8 的 runWrite 描述被实测否决）：两个
+   并发 commit 由 fossil 内部锁串行化且都能成功，不存在需要退避的场景；
+   写互斥的真正防线是进程内 writeMu（防框架 commit 与人类手动 commit 撞车）。
+
+**附带**：`.fossil-settings/ignore-glob`（版本化）+ 同名 `.no-warn` 空文件
+（消除双值警告）；知识目录占位用 README.md 不用 .keep（fossil add 默认
+跳过 dotfiles）。
+
+**依据**：`internal/fossil` 的测试矩阵（真实 fossil 二进制）、
+`cmd/marl init` 端到端测试、真机 fork_test（子写文件 → 父 commit →
+`fossil ls` 可见子写的 summary.txt，author=agent）。

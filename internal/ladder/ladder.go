@@ -1,9 +1,10 @@
 package ladder
 
-// 阶梯配置的加载与校验（Part 7.1）。
+// 阶梯配置的加载与校验（Part 7.1 / 10.4）。
 //
 // 配置文件是 YAML（ladder.yaml），由 internal/config 的受限子集解析器解析。
-// 本文件只做"解析树 → types.Ladder + 每档 thinking"的翻译与校验。
+// 本文件做"解析树 → types.Ladder + 每档 thinking + 每模型分项计价"的翻译
+// 与校验。
 
 import (
 	"fmt"
@@ -12,6 +13,7 @@ import (
 
 	"marl/internal/config"
 	"marl/internal/types"
+	"marl/internal/wire"
 )
 
 // Config 是 ladder.yaml 的内存形态。
@@ -21,6 +23,10 @@ import (
 // 的"唯一真相在阶梯"落在组装侧）。两者在 Load 时一起校验、一起消费，
 // 分开存放不产生第二真相——Router 是唯一的组装点。
 //
+// Pricing 同理平行承载：它是**模型属性**（同一模型在任何档位同价——
+// 档位只切 thinking，不切价格），因此按 model id 键控；StaticCatalog 把它
+// 喂给 wire.Catalog.Pricing（Ledger 记账的权威来源）。
+//
 // 零值契约：Config{} 不可用（Ladder 为 nil）；必须经 Load 或显式构造 + Validate。
 type Config struct {
 	Ladder *types.Ladder
@@ -28,6 +34,11 @@ type Config struct {
 	// 显式条目（缺档位声明会让 Normalizer 走"不指定"路径，实测默认档位是
 	// high——账单与配置意图不符且无告警，见 ADR-0022）。
 	Thinking map[types.RungID]types.ThinkingSpec
+	// Pricing 是每模型的分项计价（键 = model id；Part 10.4 的四项形态：
+	// 输入未命中 / 输入缓存命中 / 可见输出 / 思维链，全部每百万 token 单价）。
+	// Load 保证阶梯里引用的每个 model 都有显式条目（缺价会让记账在第一次
+	// 调用时失败——宁可启动期报错）。
+	Pricing map[string]wire.Pricing
 }
 
 // IndexOf 返回 rungID 的下标；不存在返回 -1。
@@ -68,6 +79,20 @@ func (c *Config) Validate() error {
 		seen[r.ID] = true
 		if _, ok := c.Thinking[r.ID]; !ok {
 			return fmt.Errorf("ladder: rung %s: no thinking config (ADR-0022: the ladder is the only source of thinking levels)", r.ID)
+		}
+		p, ok := c.Pricing[r.Model]
+		if !ok {
+			return fmt.Errorf("ladder: rung %s: no pricing for model %q (pricing is per-model, see 'pricing:' section)", r.ID, r.Model)
+		}
+		if r.Currency != p.Currency {
+			return fmt.Errorf("ladder: rung %s: currency %q differs from pricing currency %q (one model, one price table)", r.ID, r.Currency, p.Currency)
+		}
+		// CostPerMTok 是排序粗价，必须落在 Pricing 的可行区间内
+		// [CachedIn, In+Out]（全缓存命中到全未命中+全输出的理论界）。
+		// 越界说明两个价格表之一写错了——排序与记账的相对结论会相反。
+		if r.CostPerMTok < p.CachedInPerMTok || r.CostPerMTok > p.InPerMTok+p.OutPerMTok {
+			return fmt.Errorf("ladder: rung %s: cost_per_mtok %.2f outside pricing range [%.2f, %.2f] (sort price and billing price disagree)",
+				r.ID, r.CostPerMTok, p.CachedInPerMTok, p.InPerMTok+p.OutPerMTok)
 		}
 	}
 	// 从便宜到贵是非递减序（相等合法：同模型不同 thinking 档）。
@@ -125,7 +150,10 @@ func Parse(raw []byte) (*Config, error) {
 	if ladderNode == nil {
 		return nil, fmt.Errorf("ladder: missing 'ladder' section")
 	}
-	cfg := &Config{Thinking: make(map[types.RungID]types.ThinkingSpec)}
+	cfg := &Config{
+		Thinking: make(map[types.RungID]types.ThinkingSpec),
+		Pricing:  make(map[string]wire.Pricing),
+	}
 	for i, item := range ladderNode.List() {
 		r, th, err := rungFromNode(item, i)
 		if err != nil {
@@ -139,10 +167,61 @@ func Parse(raw []byte) (*Config, error) {
 			cfg.Ladder.Start = types.RungID(s)
 		}
 	}
+	// pricing 节：按 model id 的分项计价（Part 10.4 形态）。
+	pn := root.Get("pricing")
+	if pn == nil {
+		return nil, fmt.Errorf("ladder: missing 'pricing' section (billing needs per-model input/cached/output/reasoning prices)")
+	}
+	for i, item := range pn.List() {
+		if item == nil || item.Kind != config.KindMap {
+			return nil, fmt.Errorf("ladder: pricing[%d] is not a mapping", i)
+		}
+		model, _ := item.Get("model").Str()
+		if model == "" {
+			return nil, fmt.Errorf("ladder: pricing[%d]: model is required", i)
+		}
+		p, err := pricingFromNode(item)
+		if err != nil {
+			return nil, fmt.Errorf("ladder: pricing %s: %w", model, err)
+		}
+		if _, dup := cfg.Pricing[model]; dup {
+			return nil, fmt.Errorf("ladder: duplicate pricing for model %q", model)
+		}
+		cfg.Pricing[model] = p
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// pricingFromNode 翻译一个模型的计价条目。
+//
+// 失败：四项单价缺失（缓存命中免费也是显式写 0）、currency 缺失、
+// cached_in > in（写反了会让路由把"缓存友好"算成"更贵"，见 wire.Pricing）。
+func pricingFromNode(item *config.Node) (wire.Pricing, error) {
+	in, hasIn := item.Get("in_per_mtok").Float()
+	cached, hasCached := item.Get("cached_in_per_mtok").Float()
+	out, hasOut := item.Get("out_per_mtok").Float()
+	reasoning, hasReasoning := item.Get("reasoning_per_mtok").Float()
+	currency, _ := item.Get("currency").Str()
+	p := wire.Pricing{
+		InPerMTok: in, CachedInPerMTok: cached,
+		OutPerMTok: out, ReasoningPerMTok: reasoning,
+		Currency: currency,
+	}
+	switch {
+	case !hasIn || !hasCached || !hasOut || !hasReasoning:
+		return wire.Pricing{}, fmt.Errorf("all four unit prices are required (write 0.0 for free tiers; got in=%v cached=%v out=%v reasoning=%v)",
+			hasIn, hasCached, hasOut, hasReasoning)
+	case currency == "":
+		return wire.Pricing{}, fmt.Errorf("currency is required")
+	case cached > in:
+		return wire.Pricing{}, fmt.Errorf("cached_in_per_mtok %.2f > in_per_mtok %.2f (cache hit must not cost more than a miss)", cached, in)
+	case in < 0 || cached < 0 || out < 0 || reasoning < 0:
+		return wire.Pricing{}, fmt.Errorf("unit prices must be >= 0")
+	}
+	return p, nil
 }
 
 // ladderAppend 向 Ladder 追加一档（Ladder 零值合法的空壳，这里负责初始化）。

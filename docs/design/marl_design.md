@@ -3807,6 +3807,22 @@ L0 达标判据、哨兵、配对不变量、账本落点）见 ADR-0026。要�
 
 **目标**：`marl init` 全自动初始化 Fossil，子 Agent 写文件，父 Agent 阻塞恢复后一次 commit。
 
+**阶段 6 已完成**（2026-09-12）：实测裁决见 ADR-0030，测试报告见
+`docs/test_report/phase6-test-report.md`。要点：
+
+- `internal/fossil`：CLI 封装（读写分离 + 超时 + 错误哨兵）、生命周期
+  （InitRepo/OpenRepo/IsOpen/CloseRepo，幂等 open、重复 init 拒绝）、
+  工作区（Status=changes+extra 合并 / Add / Commit / Timeline / Diff）；
+- `internal/agent/commit.go`：doCommit（Status→Add→Commit，author=agent），
+  提交点在父的 awaitChildren 恢复之后——单写者纪律的结构保证；
+- `cmd/marl init`：fossil init+open + 骨架文件（config/profiles/prompts/
+  knowledge）+ 首次 commit（author=system）+ 重复 init 拒绝；
+- M6.5（13.14）：5 个子并发 report → 父 commit 不丢文件（`TestM6_5ConcurrentReports`）；
+- 真机 fork_test：子写 src/auth/summary.txt → 父 commit → `fossil ls` 可见
+  子写的文件、timeline author=agent；
+- 真机实测修正了 13.8 的两处假设：lockfile 退避重试**不做**（fossil 内部锁
+  已串行化，见 ADR-0030 第 6 条）；runRead 不需要 TTL 缓存（本地命令毫秒级）。
+
 具体任务：
 
 ```text
@@ -4023,7 +4039,7 @@ L0 达标判据、哨兵、配对不变量、账本落点）见 ADR-0026。要�
 | 3 | 触发压缩 | 新 View 比旧小 ≥20%（✅ 已通过：真跑 8 次压缩，收益 25.7%~30.6%） |
 | 4 | 升级到 r1 | Ledger 记录两级消耗（✅ 已通过：dry-run 升级场景 r0=2 调用 r1=1 调用，报表分项） |
 | 5 | fork 单子 | 父收到 report，子文件存在（✅ 已通过：dry-run + 真跑，sub_task_result 进父 Log） |
-| 6 | fossil commit | timeline 有 commit，author 正确 |
+| 6 | fossil commit | timeline 有 commit，author 正确（✅ 已通过：真机 fork_test，author=agent，子写文件入库） |
 | 7 | 常驻块注入 | CanonicalRequest 含 standing_orders |
 | 8 | 讨论闭环 | verdict @approve → 结论落地 |
 | 9 | 三层拓扑 | status 显示 6 节点树 |

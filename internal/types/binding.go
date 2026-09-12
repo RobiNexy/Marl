@@ -37,6 +37,13 @@ type Binding struct {
 // 零值契约：Rung{} 非法（ID/Endpoint/Model 皆空）。CostPerMTok 零值是**合法**的
 // （免费/本地模型），但零值无法区分"免费"与"忘了填价格"——而价格直接决定阶梯
 // 排序与升级决策，因此加载期应要求显式声明（见 Ladder 的校验契约）。
+//
+// [阶段 4.5 修订] CostPerMTok 是**排序用的粗粒度均价**（加权混合口径由调用方
+// 自定，例如按预期读写比折算），权威计价在 Pricing（四项分价：输入未命中/
+// 输入缓存命中/可见输出/思维链）。两处并存的理由：排序只需要"相对贵贱"
+// 一个数，逐项算加权均价会让配置文件为排序服务而不是为人服务；而记账必须
+// 分项（缓存命中与思维链的单价差数倍）。校验契约保证两者不矛盾：
+// CostPerMTok 落在 Pricing 的可行区间内（见 ladder.Config.Validate）。
 type Rung struct {
 	ID          RungID
 	Description string

@@ -142,13 +142,14 @@ func (a *Agent) awaitChildren(ctx context.Context) error {
 
 // flushChildReports 把缓冲的子 report 逐条落成 sub_task_result（真相之源
 // 只追加；血缘 = 无（report 是子的产出，不是父消息的派生——它的"出处"
-// 记在 Meta.child_id））。
+// 记在 Meta.child_id）），并保留快照供 doCommit 的 message 构造。
 //
 // 单写者：只在主 goroutine（awaitChildren）调用。
 func (a *Agent) flushChildReports(ctx context.Context) error {
 	a.mu.Lock()
 	reports := a.childReports
 	a.childReports = nil
+	a.lastReports = append(a.lastReports, reports...)
 	a.mu.Unlock()
 	for _, r := range reports {
 		e := types.NewLogEntry(a.id, types.RoleSubTaskResult, r.Report)

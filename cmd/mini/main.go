@@ -374,12 +374,6 @@ func buildCatalog(o options, cfg *ladder.Config) *ladder.StaticCatalog {
 		if r.Model == o.modelID {
 			remote = o.remote
 		}
-		// [待验证] 计价为占位值；权威价格在 models.yaml（阶段 7）落地。
-		pricing := wire.Pricing{InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"}
-		if r.Model != o.modelID {
-			pricing = wire.Pricing{InPerMTok: 4.0, CachedInPerMTok: 1.0, OutPerMTok: 8.0, ReasoningPerMTok: 8.0, Currency: "CNY"}
-		}
-		_ = remote
 		if err := cat.AddModel(wire.ModelEntry{
 			ID: r.Model, Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: remote,
 			Caps: wire.ModelCaps{
@@ -390,9 +384,15 @@ func buildCatalog(o options, cfg *ladder.Config) *ladder.StaticCatalog {
 				ThinkingControl: wire.ThinkControlLevel,
 				ThinkingLevels:  []string{"none", "low", "high", "max"},
 			},
-			Pricing: pricing,
 		}); err != nil {
 			panic(fmt.Sprintf("mini: register model %s: %v", r.Model, err))
+		}
+	}
+	// 计价从 ladder.yaml 的 pricing 节注入（ADR-0029：单一来源；代码内
+	// 不再有占位价格表）。
+	for model, p := range cfg.Pricing {
+		if err := cat.AddPricing(model, p); err != nil {
+			panic(fmt.Sprintf("mini: register pricing %s: %v", model, err))
 		}
 	}
 	if err := cat.AddEndpoint(wire.EndpointConfig{

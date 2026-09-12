@@ -27,6 +27,9 @@ type StaticCatalog struct {
 	endpoints map[string]*wire.EndpointConfig
 	ladder    *types.Ladder
 	overrides map[string]*wire.CapsOverride // key = model + "@" + endpoint
+	// pricing 是分项计价（键 = model id；权威来源是 ladder.yaml 的
+	// 'pricing:' 节，见 ADR-0029）。缺失 = 记账拒绝（不回落零价）。
+	pricing map[string]wire.Pricing
 }
 
 // NewStaticCatalog 构造空目录（ladder 随 SetLadder 注入或构造时给出）。
@@ -36,7 +39,28 @@ func NewStaticCatalog(ladder *types.Ladder) *StaticCatalog {
 		endpoints: map[string]*wire.EndpointConfig{},
 		ladder:    ladder,
 		overrides: map[string]*wire.CapsOverride{},
+		pricing:   map[string]wire.Pricing{},
 	}
+}
+
+// AddPricing 注册模型计价（从 ladder.Config.Pricing 喂入；重名报错）。
+func (c *StaticCatalog) AddPricing(modelID string, p wire.Pricing) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if modelID == "" {
+		return fmt.Errorf("catalog: pricing model id is required")
+	}
+	if p.Currency == "" {
+		return fmt.Errorf("catalog: pricing for %s: currency is required", modelID)
+	}
+	if p.CachedInPerMTok > p.InPerMTok {
+		return fmt.Errorf("catalog: pricing for %s: cached_in %.2f > in %.2f (cache hit must not cost more than a miss)", modelID, p.CachedInPerMTok, p.InPerMTok)
+	}
+	if _, dup := c.pricing[modelID]; dup {
+		return fmt.Errorf("catalog: duplicate pricing for model %q", modelID)
+	}
+	c.pricing[modelID] = p
+	return nil
 }
 
 // AddModel 注册模型（重名即启动期错误——重复注册是装配 bug，静默覆盖会让
@@ -130,12 +154,23 @@ func (c *StaticCatalog) EffectiveCaps(modelID, endpoint string) (wire.ModelCaps,
 }
 
 // Pricing 实现 wire.Catalog。
+//
+// 阶段 4.5 修订：计价的权威来源是 ladder.yaml 的 `pricing:` 节
+// （ladder.Config.Pricing，按 model id 键控）——不再有代码内的占位价格表。
+// 同一模型在任何档位同价（档位只切 thinking，不切价格）。
 func (c *StaticCatalog) Pricing(modelID, endpoint string) (wire.Pricing, error) {
-	m, err := c.Model(modelID)
-	if err != nil {
+	if _, err := c.Model(modelID); err != nil {
 		return wire.Pricing{}, err
 	}
-	return m.Pricing, nil
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	p, ok := c.pricing[modelID]
+	if !ok {
+		// 模型已注册但无计价：这是装配缺口（ladder.yaml 漏了 pricing 条目
+		// 且 AddPricing 未调用）——拒绝计价而不是零价（wire.Catalog 契约）。
+		return wire.Pricing{}, fmt.Errorf("catalog: no pricing registered for model %q (add it in ladder.yaml 'pricing:' section)", modelID)
+	}
+	return p, nil
 }
 
 // Health 实现 wire.Pool 的健康查询口径（阶段 4 不做熔断：恒返回"未探测"）。
@@ -174,6 +209,8 @@ type router struct {
 // NewRouter 构造 Router。
 //
 // 失败：catalog/cfg 为 nil、cfg 校验不过（启动期 fail fast）。
+// 同时把 cfg.Pricing 注入 catalog（单一来源：ladder.yaml 的 pricing 节；
+// 已注册过的条目被跳过——重复注入只发生在测试里）。
 func NewRouter(catalog *StaticCatalog, cfg *Config, policy RouterPolicy) (*router, error) {
 	if catalog == nil {
 		return nil, fmt.Errorf("ladder: catalog is required")
@@ -181,7 +218,22 @@ func NewRouter(catalog *StaticCatalog, cfg *Config, policy RouterPolicy) (*route
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	for model, p := range cfg.Pricing {
+		if err := catalog.AddPricing(model, p); err != nil {
+			// 已注册的（如测试先手动注入）跳过；其余错误 fail fast。
+			if _, dup := cfg.Pricing[model]; dup && catalogHasPricing(catalog, model) {
+				continue
+			}
+			return nil, fmt.Errorf("ladder: pricing %s: %w", model, err)
+		}
+	}
 	return &router{catalog: catalog, cfg: cfg, policy: policy, now: time.Now}, nil
+}
+
+// catalogHasPricing 报告 catalog 是否已有该模型的计价（注入去重用）。
+func catalogHasPricing(c *StaticCatalog, model string) bool {
+	_, err := c.Pricing(model, "")
+	return err == nil
 }
 
 // Bind 实现 wire.Router（契约见接口注释）。

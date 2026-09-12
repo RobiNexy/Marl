@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"marl/internal/agent"
+	"marl/internal/fossil"
 	"marl/internal/ladder"
 	"marl/internal/ns"
 	"marl/internal/proto"
@@ -34,12 +35,13 @@ import (
 	"marl/internal/wire"
 )
 
-// options 是命令行选项（与 mini 同一取舍：阶段 5 无配置层）。
+// options 是命令行选项（与 mini 同一取舍：阶段 5/6 无配置层）。
 type options struct {
 	apiKeyEnv string
 	baseURL   string
 	dbPath    string
 	dryRun    bool
+	keep      bool // 保留工作区（fossil diff/timeline 的人工验证用）
 }
 
 func parseOptions(args []string) options {
@@ -49,6 +51,7 @@ func parseOptions(args []string) options {
 	fs.StringVar(&o.baseURL, "base-url", "https://api.deepseek.com/v1", "接入点根地址")
 	fs.StringVar(&o.dbPath, "db", ".marl-fork/supervisor.db", "SQLite 数据库路径")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "脚本化回放：不联网")
+	fs.BoolVar(&o.keep, "keep", false, "保留工作区目录（默认任务结束即删；人工验证 fossil 时打开）")
 	_ = fs.Parse(args)
 	return o
 }
@@ -70,7 +73,11 @@ func run(o options) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(root)
+	if !o.keep {
+		defer os.RemoveAll(root)
+	} else {
+		fmt.Printf("（工作区保留：%s）\n", root)
+	}
 	for _, f := range []struct {
 		rel, content string
 	}{
@@ -155,6 +162,19 @@ func run(o options) error {
 		return err
 	}
 
+	// --- Fossil（阶段 6：单写者提交——父恢复后一次 commit）---
+	cli, err := fossil.NewCLI("")
+	if err != nil {
+		return fmt.Errorf("fossil: %w", err)
+	}
+	repo := filepath.Join(filepath.Dir(o.dbPath), "project.fossil")
+	if err := cli.InitRepo(ctx, repo, adminUserName()); err != nil {
+		return fmt.Errorf("fossil init: %w", err)
+	}
+	if err := cli.OpenRepo(ctx, repo, root); err != nil {
+		return fmt.Errorf("fossil open: %w", err)
+	}
+
 	// --- Spawner（裁决关口 + 进程表）---
 	spw, err := spawner.New(spawner.Config{
 		MaxDepth:        1,
@@ -216,6 +236,7 @@ func run(o options) error {
 		Thinking:     pb.Thinking,
 		Mailbox:      mb,
 		Spawner:      spw,
+		Committer:    &agent.CommitConfig{VCS: cli, RepoPath: repo},
 		TaskID:       "fork-task",
 		Audit:        store.AuditSQLite{SQLiteStore: st},
 	})
@@ -225,8 +246,9 @@ func run(o options) error {
 	if err := parent.SetBinding(pb); err != nil {
 		return err
 	}
-	task := "列出 src/ 下所有 .go 文件，fork 一个子 Agent 去读第一个文件（子只读）；" +
-			"等子完成后，用不超过三句话总结它读到的内容。"
+	task := "列出 src/ 下所有 .go 文件，fork 一个子 Agent；" +
+			"子任务：在 src/auth/ 下写 summary.txt，内容为三行以内的 src/main.go 摘要。" +
+			"等子完成后，用不超过三句话总结它做了什么。"
 	if err := parent.AppendUser(ctx, task); err != nil {
 		return err
 	}
@@ -235,16 +257,21 @@ func run(o options) error {
 	}
 
 	printTree(parent, spw)
+	printTimeline(ctx, repo, cli)
 	return printLog(ctx, parent.ID(), st, o.dbPath)
 }
 
-// singleRungLadder 构造单档阶梯（阶段 5 不测升级）。
+// singleRungLadder 构造单档阶梯（阶段 5/6 不测升级；计价从 ladder-mini.yaml
+// 的同源形态内嵌——DeepSeek 官方价随时间变化，改动只改配置）。
 func singleRungLadder(o options) *ladder.Config {
 	return &ladder.Config{
+		Pricing: map[string]wire.Pricing{
+			"deepseek/chat": {InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"},
+		},
 		Ladder: &types.Ladder{
 			Rungs: []types.Rung{{
 				ID: "r0", Endpoint: "deepseek-main", Model: "deepseek/chat",
-				CostPerMTok: 1.0, Currency: "CNY",
+				CostPerMTok: 1.5, Currency: "CNY",
 			}},
 			Start: "r0",
 		},
@@ -326,8 +353,9 @@ func (p *parentScript) ExecuteTurn(_ context.Context, _ *wire.CanonicalRequest) 
 		return withUsageT(toolCallTurnT(mkT("list_dir", map[string]any{"path": "src", "depth": 2}))), nil
 	case 1:
 		return withUsageT(toolCallTurnT(mkT("spawn_subagent", map[string]any{
-			"profile_id": "coder",
-			"task":       "读取 src/main.go 的前 10 行，总结这个文件是什么。",
+			"profile_id":    "coder",
+			"task":          "在 src/auth/ 下写 summary.txt，内容为三行以内的 src/main.go 摘要，然后 report。",
+			"writable_paths": []string{"src/auth/**"},
 		}))), nil
 	default:
 		return withUsageT(replyTurnT("子 Agent 读完了 src/main.go：一个打印 hello 的 main 包入口。任务完成。")), nil
@@ -342,10 +370,14 @@ func (c *childScript) ExecuteTurn(_ context.Context, _ *wire.CanonicalRequest) (
 	switch c.round {
 	case 0:
 		return withUsageT(toolCallTurnT(mkT("file_read", map[string]any{"path": "src/main.go", "limit": 10}))), nil
+	case 1:
+		return withUsageT(toolCallTurnT(mkT("file_write", map[string]any{
+			"path": "src/auth/summary.txt", "content": "package main\nmain 打印 hello\n5 行代码\n",
+		}))), nil
 	default:
 		return withUsageT(toolCallTurnT(mkT("report_to_parent", map[string]any{
 			"status": "success",
-			"report": "已读取 src/main.go 前 10 行：package main，main 函数打印 hello。纯阅读任务，无文件改动。",
+			"report": "已写入 src/auth/summary.txt：src/main.go 的三行摘要（package main / 打印 hello / 5 行代码）。",
 		}))), nil
 	}
 }
@@ -407,6 +439,27 @@ func withUsageT(turn *wire.WireTurn) *wire.WireTurn {
 		turn.Outcomes[i].Usage = u
 	}
 	return turn
+}
+
+// adminUserName 取 fossil 管理员用户（与 cmd/marl 同一规则）。
+func adminUserName() string {
+	if u := os.Getenv("MARL_ADMIN_USER"); u != "" {
+		return u
+	}
+	return os.Getenv("USER")
+}
+
+// printTimeline 打印 fossil timeline（交付判据：commit 可见、author 正确）。
+func printTimeline(ctx context.Context, repo string, cli *fossil.CLI) {
+	fmt.Println("━━━━━━━━━━ Fossil Timeline ━━━━━━━━━━")
+	entries, err := cli.Timeline(ctx, repo, 5)
+	if err != nil {
+		fmt.Printf("（timeline 读取失败：%v）\n", err)
+		return
+	}
+	for _, e := range entries {
+		fmt.Printf("%s [%s] %s (user: %s)\n", e.Time.Format("15:04:05"), e.Hash[:8], e.Comment, e.Author)
+	}
 }
 
 // printTree 打印 Agent 树（marl status 的雏形；Part 8.6 的可观测性）。

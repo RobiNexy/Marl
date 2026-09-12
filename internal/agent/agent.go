@@ -115,6 +115,11 @@ type Config struct {
 	// ReportChecker 是 report 的机械检查（原则 4；ReportSink 非 nil 时必须
 	// 提供——没有检查器的 report 等于无条件采信自述）。
 	ReportChecker proto.ReportChecker
+
+	// ---- 阶段 6：单写者提交 ----
+	// Committer 非 nil 即启用（只有父 Agent 装配它——单写者纪律的结构
+	// 保证：提交点在父的唯一代码路径上）。
+	Committer *CommitConfig
 }
 
 // Agent 是一个单任务的执行体（Part 8.1，阶段 2 无 Mailbox/父子拓扑）。
@@ -160,6 +165,9 @@ type Agent struct {
 	// Transient（Part 3.6）：尾部 volatile 提示，不入 Log，下一轮编译后丢弃。
 	transients []string
 
+	// 阶段 6：单写者提交（只有父装配）。
+	commit *CommitConfig
+
 	// 阶段 5：拓扑与消息。
 	parentID      types.AgentID
 	maxDepth      int
@@ -177,6 +185,8 @@ type Agent struct {
 	reported bool
 	// 成功写入的文件（机械检查的数据源；file_write 成功时记录）。
 	writtenFiles map[string]bool
+	// 最近一轮子 report 快照（commitMessage 用；flush 时记录）。
+	lastReports []*proto.ChildReport
 
 	blockReason types.BlockReason // 与 state 的双向约束见 types.BlockReason
 
@@ -266,6 +276,7 @@ func New(cfg Config) (*Agent, error) {
 		spawner:          cfg.Spawner,
 		reporter:         cfg.ReportSink,
 		reportChecker:    cfg.ReportChecker,
+		commit:           cfg.Committer,
 		pendingChildren:  map[types.AgentID]bool{},
 		childrenStatus:   map[types.AgentID]types.ChildStatus{},
 		reportsDone:      make(chan struct{}, 1),
@@ -392,6 +403,12 @@ func (a *Agent) Run(ctx context.Context) error {
 		if errors.Is(err, errWaitChildren) {
 			if werr := a.awaitChildren(ctx); werr != nil {
 				err = werr
+				break
+			}
+			// 单写者提交（Part 8.4）：全部子 report 已落库、父已恢复——
+			// 这是唯一的提交点。失败上抛（提交失败必须可见）。
+			if cerr := a.doCommit(ctx); cerr != nil {
+				err = cerr
 				break
 			}
 			continue // 子结果已落 Log+View，下一轮编排自然看到

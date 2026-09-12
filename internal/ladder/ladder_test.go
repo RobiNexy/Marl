@@ -18,6 +18,10 @@ import (
 
 func testLadderCfg() *Config {
 	return &Config{
+		Pricing: map[string]wire.Pricing{
+			"deepseek/chat":   {InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"},
+			"deepseek/v4-pro": {InPerMTok: 4.0, CachedInPerMTok: 1.0, OutPerMTok: 8.0, ReasoningPerMTok: 8.0, Currency: "CNY"},
+		},
 		Ladder: &types.Ladder{
 			Rungs: []types.Rung{
 				{ID: "r0", Endpoint: "ep", Model: "deepseek/chat", CostPerMTok: 1.0, Currency: "CNY"},
@@ -100,6 +104,13 @@ func TestParseLadderYAML(t *testing.T) {
       level: "high"
     cost_per_mtok: 1.0
     currency: "CNY"
+pricing:
+  - model: "deepseek/chat"
+    in_per_mtok: 1.0
+    cached_in_per_mtok: 0.25
+    out_per_mtok: 2.0
+    reasoning_per_mtok: 2.0
+    currency: CNY
 start: "r0"
 `)
 	cfg, err := Parse(src)
@@ -114,6 +125,90 @@ start: "r0"
 	}
 	if cfg.IndexOf("r1") != 1 || cfg.IndexOf("nope") != -1 {
 		t.Fatalf("IndexOf broken")
+	}
+	// 分项计价（Part 10.4 形态）。
+	p := cfg.Pricing["deepseek/chat"]
+	if p.InPerMTok != 1.0 || p.CachedInPerMTok != 0.25 || p.OutPerMTok != 2.0 || p.ReasoningPerMTok != 2.0 || p.Currency != "CNY" {
+		t.Fatalf("pricing: %+v", p)
+	}
+}
+
+func TestLoadPricingValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"missing pricing section", `ladder:
+  - id: r0
+    endpoint: ep
+    model: m
+    thinking: {level: "off"}
+    cost_per_mtok: 1.0
+    currency: CNY`, "missing 'pricing'"},
+		{"missing unit price", `ladder:
+  - id: r0
+    endpoint: ep
+    model: m
+    thinking: {level: "off"}
+    cost_per_mtok: 1.0
+    currency: CNY
+pricing:
+  - model: m
+    in_per_mtok: 1.0
+    cached_in_per_mtok: 0.25
+    out_per_mtok: 2.0
+    currency: CNY`, "all four unit prices"},
+		{"cached > in", `ladder:
+  - id: r0
+    endpoint: ep
+    model: m
+    thinking: {level: "off"}
+    cost_per_mtok: 1.0
+    currency: CNY
+pricing:
+  - model: m
+    in_per_mtok: 1.0
+    cached_in_per_mtok: 2.0
+    out_per_mtok: 2.0
+    reasoning_per_mtok: 2.0
+    currency: CNY`, "cache hit must not cost more"},
+		{"rung currency mismatch", `ladder:
+  - id: r0
+    endpoint: ep
+    model: m
+    thinking: {level: "off"}
+    cost_per_mtok: 1.0
+    currency: USD
+pricing:
+  - model: m
+    in_per_mtok: 1.0
+    cached_in_per_mtok: 0.25
+    out_per_mtok: 2.0
+    reasoning_per_mtok: 2.0
+    currency: CNY`, "one model, one price table"},
+		{"sort price out of range", `ladder:
+  - id: r0
+    endpoint: ep
+    model: m
+    thinking: {level: "off"}
+    cost_per_mtok: 99.0
+    currency: CNY
+pricing:
+  - model: m
+    in_per_mtok: 1.0
+    cached_in_per_mtok: 0.25
+    out_per_mtok: 2.0
+    reasoning_per_mtok: 2.0
+    currency: CNY`, "sort price and billing price disagree"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse([]byte(tc.src))
+			if err == nil || !contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want contains %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -130,19 +225,40 @@ func TestLoadValidationFailures(t *testing.T) {
     endpoint: ep
     model: m
     cost_per_mtok: 1.0
+    currency: CNY
+pricing:
+  - model: m
+    in_per_mtok: 1.0
+    cached_in_per_mtok: 0.25
+    out_per_mtok: 2.0
+    reasoning_per_mtok: 2.0
     currency: CNY`, "thinking config is required"},
 		{"missing cost", `ladder:
   - id: r0
     endpoint: ep
     model: m
     thinking: {level: "off"}
+    currency: CNY
+pricing:
+  - model: m
+    in_per_mtok: 1.0
+    cached_in_per_mtok: 0.25
+    out_per_mtok: 2.0
+    reasoning_per_mtok: 2.0
     currency: CNY`, "cost_per_mtok is required"},
 		{"missing currency", `ladder:
   - id: r0
     endpoint: ep
     model: m
     thinking: {level: "off"}
-    cost_per_mtok: 1.0`, "currency is required"},
+    cost_per_mtok: 1.0
+pricing:
+  - model: m
+    in_per_mtok: 1.0
+    cached_in_per_mtok: 0.25
+    out_per_mtok: 2.0
+    reasoning_per_mtok: 2.0
+    currency: CNY`, "currency is required"},
 		{"wrong order", `ladder:
   - id: r0
     endpoint: ep
@@ -155,6 +271,13 @@ func TestLoadValidationFailures(t *testing.T) {
     model: m
     thinking: {level: "off"}
     cost_per_mtok: 1.0
+    currency: CNY
+pricing:
+  - model: m
+    in_per_mtok: 2.0
+    cached_in_per_mtok: 0.5
+    out_per_mtok: 6.0
+    reasoning_per_mtok: 6.0
     currency: CNY`, "cheap→expensive"},
 		{"dup id", `ladder:
   - id: r0
@@ -168,6 +291,13 @@ func TestLoadValidationFailures(t *testing.T) {
     model: m
     thinking: {level: "off"}
     cost_per_mtok: 1.0
+    currency: CNY
+pricing:
+  - model: m
+    in_per_mtok: 1.0
+    cached_in_per_mtok: 0.25
+    out_per_mtok: 2.0
+    reasoning_per_mtok: 2.0
     currency: CNY`, "duplicate rung id"},
 		{"bad start", `ladder:
   - id: r0
@@ -175,6 +305,13 @@ func TestLoadValidationFailures(t *testing.T) {
     model: m
     thinking: {level: "off"}
     cost_per_mtok: 1.0
+    currency: CNY
+pricing:
+  - model: m
+    in_per_mtok: 1.0
+    cached_in_per_mtok: 0.25
+    out_per_mtok: 2.0
+    reasoning_per_mtok: 2.0
     currency: CNY
 start: r9`, "not found in rungs"},
 	}
@@ -290,6 +427,7 @@ func TestRouterFailures(t *testing.T) {
 				{ID: "r0", Endpoint: "ep", Model: "ghost/model", CostPerMTok: 1, Currency: "CNY"},
 			}, Start: "r0"},
 			Thinking: map[types.RungID]types.ThinkingSpec{"r0": {Level: "off"}},
+			Pricing:  map[string]wire.Pricing{"ghost/model": {InPerMTok: 1, CachedInPerMTok: 0.25, OutPerMTok: 2, ReasoningPerMTok: 2, Currency: "CNY"}},
 		}
 		r2 := testRouter(t, broken, RouterPolicy{})
 		_, err := r2.Bind(req, "a", broken.Ladder, 0)

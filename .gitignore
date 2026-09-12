@@ -39,3 +39,7 @@ coverage.out
 # 注：运行时若把 Message Log / Fossil 工作副本落在项目内，
 # 请按实际路径补充忽略规则（例如 /.marl/、/supervisor.db）。
 ladder_report
+
+# Fossil checkout 数据库（运行期，不入版本控制）
+.fslckout
+.fossil-settings/
