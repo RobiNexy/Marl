@@ -27,23 +27,25 @@ import (
 	"marl/internal/fossil"
 )
 
-func main() {
-	// 子命令剥离：Go 的 flag 不支持 "marl init -dir x" 的子命令形态
-	// （flag.Parse 会在第一个位置参数处停止，-dir 落到 Args 里）。
-	// 阶段 6 只有 init 一个子命令；更多子命令时引入手写分发。
-	args := os.Args[1:]
-	if len(args) > 0 && args[0] == "init" {
-		args = args[1:]
-	}
+// cmdInit 处理 init 子命令（main.go 分发；兼容位置参数 dir，
+// "marl init [dir]"——flag 包在第一个位置参数处停止，所以手动取）。
+func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("marl init", flag.ContinueOnError)
-	dir := fs.String("dir", ".", "项目目录（缺省当前目录）")
+	dir := fs.String("dir", "", "项目目录（与位置参数等价；用于脚本化的显式书写）")
 	if err := fs.Parse(args); err != nil {
-		os.Exit(1)
+		return err
 	}
-	if err := run(*dir); err != nil {
-		fmt.Fprintf(os.Stderr, "marl init: %v\n", err)
-		os.Exit(1)
+	target := fs.Arg(0)
+	if fs.Arg(1) != "" {
+		return fmt.Errorf("too many positional args (%q, %q...); want: marl init [dir]", fs.Arg(0), fs.Arg(1))
 	}
+	if target == "" {
+		target = *dir
+	}
+	if target == "" {
+		target = "."
+	}
+	return run(target)
 }
 
 func run(dir string) error {

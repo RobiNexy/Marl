@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync"
 
+	"marl/internal/discuss"
 	"marl/internal/ladder"
 	"marl/internal/ledger"
 	"marl/internal/proto"
@@ -120,6 +121,20 @@ type Config struct {
 	// Committer 非 nil 即启用（只有父 Agent 装配它——单写者纪律的结构
 	// 保证：提交点在父的唯一代码路径上）。
 	Committer *CommitConfig
+
+	// ---- 阶段 7：Profile 与知识库 ----
+	// StandingOrders 是 preferences/ 的编译产物（knowledge.CompileStandingOrders；
+	// 空串 = 无常驻块）。byte-stability 由编译器归一化 + golden test 保证，
+	// 本包只搬运（compileView 的 SegStanding 段，frozen 前缀的一部分）。
+	StandingOrders string
+	// TaskDescription 是任务的私有段文本（Part 6.10：fork 时的不可变输入；
+	// 空串表示无私有任务段）。
+	TaskDescription string
+
+	// ---- 阶段 8：人机协作（讨论） ----
+	// Discussion 非 nil 即启用（装配缺失时 request_discussion 回填
+	// INTENT_NOT_HANDLED——如实拒绝而不是装死）。
+	Discussion *DiscussionConfig
 }
 
 // Agent 是一个单任务的执行体（Part 8.1，阶段 2 无 Mailbox/父子拓扑）。
@@ -167,6 +182,15 @@ type Agent struct {
 
 	// 阶段 6：单写者提交（只有父装配）。
 	commit *CommitConfig
+
+	// 阶段 7：常驻块与私有段（frozen 前缀的构成件；只在构造时赋值一次）。
+	standingOrders string
+	taskDesc       string
+
+	// 阶段 8：讨论（会话由 Agent 持有——Session 承载 nonce/轮次的运行态）。
+	discussCfg     *DiscussionConfig
+	discussSess    *discuss.Session
+	discussPending bool
 
 	// 阶段 5：拓扑与消息。
 	parentID      types.AgentID
@@ -277,6 +301,9 @@ func New(cfg Config) (*Agent, error) {
 		reporter:         cfg.ReportSink,
 		reportChecker:    cfg.ReportChecker,
 		commit:           cfg.Committer,
+		standingOrders:   cfg.StandingOrders,
+		taskDesc:         cfg.TaskDescription,
+		discussCfg:       cfg.Discussion,
 		pendingChildren:  map[types.AgentID]bool{},
 		childrenStatus:   map[types.AgentID]types.ChildStatus{},
 		reportsDone:      make(chan struct{}, 1),
@@ -393,6 +420,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		return fmt.Errorf("agent: Run on state %q (must be fresh instance or Idle)", a.state)
 	}
 	a.state = types.StateRunning
+	a.auditState(ctx, "running", "")
 	a.startPump(ctx)
 	var err error
 	for {
@@ -413,9 +441,20 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 			continue // 子结果已落 Log+View，下一轮编排自然看到
 		}
+		if errors.Is(err, errDiscussing) {
+			// Blocked(Discussing)（Part 8.2 的讨论等待；等待期间不烧钱——
+			// 见 awaitDiscussion 的注释）。恢复后继续 loop：批注的响应在
+			// 下一轮编排里（annotation 入 Log 后 LLM 会看到它）。
+			if werr := a.awaitDiscussion(ctx); werr != nil {
+				err = werr
+				break
+			}
+			continue
+		}
 		break // 其它错误原样上抛
 	}
 	a.state = types.StateIdle
+	a.auditState(ctx, "idle", "")
 	if saveErr := a.views.SaveView(ctx, a.view); saveErr != nil {
 		// View 写失败不掩盖业务结论（它是投影的持久化，可重建）；
 		// 但必须可见：与 err 合流而不是丢弃。

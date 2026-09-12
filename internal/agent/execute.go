@@ -71,6 +71,12 @@ func (a *Agent) eventLoop(ctx context.Context) error {
 		if a.hasPendingChildren() {
 			return errWaitChildren
 		}
+		// 讨论进行中 → 阻塞等人类（Part 8.2 的 Blocked(Discussing)）。
+		// 位置在工具执行与"turn 结束"判定之后：annotation 恢复后的响应轮
+		// 可先跑完（含可能的草稿修订与子 report），随后再回到等待。
+		if a.discussSess != nil {
+			return errDiscussing
+		}
 		if toolCount == 0 && turn.Ready() {
 			return nil
 		}

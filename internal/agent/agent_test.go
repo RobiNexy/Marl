@@ -163,13 +163,15 @@ func TestLoopListDirThenReadThenReply(t *testing.T) {
 	}
 
 	// 第二次请求（续轮）编译到上下文，应带工具历史 + 前序回复（缓存口径）。
-	if seg0 := len(llm.reqs[0].Segments); seg0 != 2 { // system + user
-		t.Fatalf("first request segments = %d, want 2", seg0)
+	// 请求段 = system + 私有段 <agent_context>（阶段 7：测试装配带命名
+	// 空间挂载）+ user。
+	if seg0 := len(llm.reqs[0].Segments); seg0 != 3 {
+		t.Fatalf("first request segments = %d, want 3 (system + private + user)", seg0)
 	}
 	last := llm.reqs[len(llm.reqs)-1]
-	// system + user + (assistant tool_calls + tool result)*2 —— 最后一条是
-	// 本轮回复"发出前"的第三次 Execute 的输入（回复在其后追加）。
-	if got := len(last.Segments); got != 2+2*2 {
+	// system + 私有段 + user + (assistant tool_calls + tool result)*2 —— 最后
+	// 一条是本轮回复"发出前"的第三次 Execute 的输入（回复在其后追加）。
+	if got := len(last.Segments); got != 3+2*2 {
 		t.Fatalf("last compile segments = %d: %+v", got, last.Segments)
 	}
 }

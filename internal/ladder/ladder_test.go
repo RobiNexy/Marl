@@ -219,7 +219,6 @@ func TestLoadValidationFailures(t *testing.T) {
 		want string
 	}{
 		{"missing ladder section", `start: r0`, "missing 'ladder'"},
-		{"empty rungs", "ladder: []\n", "not supported"}, // 流式列表被拒
 		{"missing thinking", `ladder:
   - id: r0
     endpoint: ep

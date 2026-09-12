@@ -54,6 +54,8 @@ func (a *Agent) executeIntent(ctx context.Context, call types.ToolCall) (*skill.
 		return a.intentSpawn(ctx, call)
 	case proto.ToolReportToParent:
 		return a.intentReport(ctx, call)
+	case proto.ToolRequestDiscussion:
+		return a.intentDiscussion(ctx, call)
 	default:
 		return skill.NewFailure(ErrIntentNotHandled,
 			"意图 %s 在当前阶段不可用（框架未实现该裁决关口）", call.Name), nil

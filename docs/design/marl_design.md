@@ -4040,8 +4040,8 @@ L0 达标判据、哨兵、配对不变量、账本落点）见 ADR-0026。要�
 | 4 | 升级到 r1 | Ledger 记录两级消耗（✅ 已通过：dry-run 升级场景 r0=2 调用 r1=1 调用，报表分项） |
 | 5 | fork 单子 | 父收到 report，子文件存在（✅ 已通过：dry-run + 真跑，sub_task_result 进父 Log） |
 | 6 | fossil commit | timeline 有 commit，author 正确（✅ 已通过：真机 fork_test，author=agent，子写文件入库） |
-| 7 | 常驻块注入 | CanonicalRequest 含 standing_orders |
-| 8 | 讨论闭环 | verdict @approve → 结论落地 |
+| 7 | 常驻块注入 | CanonicalRequest 含 standing_orders（✅ 已通过：compileView 段序 system→standing→私有段→历史，-race 全绿；lint 超限退出 1） |
+| 8 | 讨论闭环 | verdict @approve → 结论落地（✅ 已通过：discuss_loop全流程回放，author=agent 的草稿双版 + author=human 的 Finalize commit） |
 | 9 | 三层拓扑 | status 显示 6 节点树 |
 | 10 | 全功能 | 所有"不做"清单清零 |
 

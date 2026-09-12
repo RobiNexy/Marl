@@ -73,18 +73,29 @@ func (a *Agent) compileView(ctx context.Context) (*wire.CanonicalRequest, error)
 		a.thinking = a.binding.Thinking
 	}
 
-	req := &wire.CanonicalRequest{
-		// 段序：frozen 的 system 在前（StabilityRank=0）；历史 turn 全是 stable。
-		Segments: []wire.Segment{{
-			Kind:      wire.SegSystem,
-			Speaker:   wire.SpeakerFramework,
-			Content:   a.sysPrompt,
-			Stability: types.StabilityFrozen,
-		}},
-		Tools:    append(toolsFromRegistry(a.skills), intentSchemas()...),
-		Sampling: a.sampling,
-		Thinking: a.thinking,
+	// frozen 前缀分区（Part 12.3 段序：system → standing → 私有段 → 历史）。
+	// 段构造条件显式：standing 为空 / 无私有内容时跳过（空段剔除纪律）。
+	req := &wire.CanonicalRequest{}
+	frozen := []wire.Segment{{
+		Kind:      wire.SegSystem,
+		Speaker:   wire.SpeakerFramework,
+		Content:   a.sysPrompt,
+		Stability: types.StabilityFrozen,
+	}}
+	if seg := standingSegment(a.standingOrders); seg != nil {
+		frozen = append(frozen, *seg)
 	}
+	maxDepth := a.maxDepth
+	if maxDepth <= 0 {
+		maxDepth = a.depth // 0 = 未设的上限（阶段 2 行为：与自身深度同位）
+	}
+	if seg := privateSegment(a.depth, maxDepth, a.env.Namespace, a.taskDesc); seg != nil {
+		frozen = append(frozen, *seg)
+	}
+	req.Segments = frozen
+	req.Tools = append(toolsFromRegistry(a.skills), intentSchemas()...)
+	req.Sampling = a.sampling
+	req.Thinking = a.thinking
 
 	// 编译序 = Position 升序（Part 3.3：Position 是顺序的唯一权威）。
 	// 阶段 2 只追加时切片序即 Position 序；阶段 3 起编排操作（reorder /

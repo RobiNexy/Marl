@@ -126,6 +126,7 @@ func (a *Agent) hasPendingChildren() bool {
 func (a *Agent) awaitChildren(ctx context.Context) error {
 	a.state = types.StateBlocked
 	a.blockReason = types.BlockWaitChildren
+	a.auditState(ctx, "blocked", string(types.BlockWaitChildren))
 	var err error
 	select {
 	case <-ctx.Done():
@@ -134,10 +135,20 @@ func (a *Agent) awaitChildren(ctx context.Context) error {
 	}
 	a.state = types.StateRunning
 	a.blockReason = ""
+	a.auditState(ctx, "running", "")
 	if err != nil {
 		return err
 	}
 	return a.flushChildReports(ctx)
+}
+
+// auditState 记一条状态迁移审计（marl status 从审计重建进程状态表的唯一
+// 数据源——运行时内存态不做跨进程展示；audit 为 nil 时跳过）。
+func (a *Agent) auditState(ctx context.Context, state, reason string) {
+	a.auditf(ctx, "agent_state", state, map[string]any{
+		"agent_id": string(a.id),
+		"reason":   reason,
+	})
 }
 
 // flushChildReports 把缓冲的子 report 逐条落成 sub_task_result（真相之源

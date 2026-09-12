@@ -12,13 +12,14 @@
 //   - `key: value` 映射；`key:`（值为空）后跟更深层级的块；
 //   - `- ` 列表项；`- key: value` 起始的映射项（后续更深层级行归属该项）；
 //   - 行内流式映射 `{k: v, k2: "v2"}`（仅标量值）；
+//   - 行内流式列表 `[a, b, "c"]`（仅标量项）；
 //   - 标量：双引号/单引号字符串、裸词、整数、浮点；
 //   - 注释：整行 `#` 与行尾 ` #`（引号内的 # 不算注释）。
 //
 // # 显式拒绝（报错，不做容错推断）
 //
 //   - Tab 缩进、多文档（---）、锚点/引用（&/*）、块标量（|/>）、
-//     行内流式列表 [...]、嵌套花括号。
+//     嵌套花括号。
 //
 // 解析产出是 Node 树（Map/List/Scalar），消费方用 Get/Str/Int/Float 取值——
 // 类型转换的错误在消费方报出（带字段路径），解析器只管结构。
@@ -339,9 +340,9 @@ func splitKey(text string) (key, rest string, ok bool) {
 	return "", "", false
 }
 
-// parseScalar 解析标量或行内流式映射。
+// parseScalar 解析标量、行内流式映射或行内流式列表（仅标量项）。
 //
-// 失败：未闭合引号、嵌套花括号、流式列表（本子集不支持）。
+// 失败：未闭合引号、嵌套花括号。
 // 并发：纯函数。
 func parseScalar(text string, lineNo int) (*Node, error) {
 	if strings.HasPrefix(text, "{") {
@@ -368,7 +369,25 @@ func parseScalar(text string, lineNo int) (*Node, error) {
 		return node, nil
 	}
 	if strings.HasPrefix(text, "[") {
-		return nil, fmt.Errorf("config: line %d: flow sequences [...] are not supported (use block list)", lineNo)
+		if !strings.HasSuffix(text, "]") {
+			return nil, fmt.Errorf("config: line %d: unclosed flow sequence", lineNo)
+		}
+		inner := strings.TrimSpace(text[1 : len(text)-1])
+		node := &Node{Kind: KindList, Line: lineNo}
+		if inner == "" {
+			return node, nil
+		}
+		for _, part := range splitFlow(inner) {
+			sv, err := parseScalar(part, lineNo)
+			if err != nil {
+				return nil, err
+			}
+			if sv.Kind != KindScalar {
+				return nil, fmt.Errorf("config: line %d: flow sequence entry %q is not a scalar", lineNo, part)
+			}
+			node.Items = append(node.Items, sv)
+		}
+		return node, nil
 	}
 	if strings.HasPrefix(text, "|") || strings.HasPrefix(text, ">") {
 		return nil, fmt.Errorf("config: line %d: block scalars (| >) are not supported", lineNo)

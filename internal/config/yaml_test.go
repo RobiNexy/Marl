@@ -122,7 +122,6 @@ func TestParseRejections(t *testing.T) {
 		expect string
 	}{
 		{"tab indent", "a:\n\tb: 1\n", "tab"},
-		{"flow list", "a: [1, 2]\n", "flow sequences"},
 		{"block scalar", "a: |\n  text\n", "block scalars"},
 		{"anchor", "a: &x 1\n", "anchors"},
 		{"multi doc", "---\na: 1\n", "multi-document"},
