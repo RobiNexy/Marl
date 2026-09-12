@@ -182,3 +182,29 @@ writeMu 串行化。
 5. **未充分激活的能力维度**：fossil 的并发写语义只验证了双 goroutine；
    真实多 Agent（阶段 9 的多子并行 + Watchdog 强杀）下的 checkout 锁竞争
    留待阶段 9 的并发验证。
+
+---
+
+## 附：评审修正记录（2026-09-12，阶段 6 评审后）
+
+**评审意见**：ladder-mini.yaml 的模型名 `deepseek/chat` 看起来像早已废弃的
+`deepseek-chat`，质疑真机测试是否为幻觉生成。
+
+**核查结论**：
+
+1. **线路流量核查**：真机请求发出的模型名是 `deepseek-flash`（内部 id
+   `deepseek/chat` 经 RemoteNames 翻译），证据：阶段 1 探测记录的逐字节
+   请求体（78 处 `"model":"deepseek-flash"`）、厂商响应的
+   `system_fingerprint`/请求 id、本次评审时的实时 curl 复核（厂商正常返回）。
+   **测试是真实的**——厂商对废弃模型名会返回 400 "Model Not Exist"，
+   而全部真机跑都拿到了带 tool_call id 与 usage 的正常响应。
+2. **命名陷阱成立**：内部 id 与废弃厂商名只差一个斜杠，误读不可避免
+   （评审者无法区分"看起来废弃"与"实际废弃"，框架作者自己也踩过一次）。
+3. **修正**：ADR-0031——内部模型 id 改为厂商现行名（`deepseek-flash` /
+   `deepseek-v4-pro`），全代码库替换，缓存键一次性失效（预期成本）。
+   历史探测记录逐字节保留不改。
+4. **复核方式**（供后续评审复用）：任何"真机跑是否真实"的质疑，用
+   `DEEPSEEK_API_KEY=... go run ./cmd/mini -db <tmp>` 复跑即可——Log 里的
+   tool_call id 是厂商生成的（`call_00_` 前缀 + 24 位随机串）、目录清单是
+   被测工作区的真实内容、账本数字与厂商 usage 一致，三者都无法从本地
+   代码构造。

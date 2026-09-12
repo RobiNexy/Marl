@@ -524,8 +524,8 @@ func TestDeepSeekChatAdapterModelName(t *testing.T) {
 			BaseURL:      "https://api.deepseek.com/v1",
 			APIKey:       testAPIKey,
 			RemoteNames: map[string]string{
-				"deepseek/v4-pro": "deepseek-v4-pro",
-				"deepseek/chat":   testRemote,
+				"deepseek-v4-pro": "deepseek-v4-pro",
+				"deepseek-flash":   testRemote,
 			},
 		}
 		many, err := NewDeepSeekChatAdapter(cfg)
@@ -540,7 +540,7 @@ func TestDeepSeekChatAdapterModelName(t *testing.T) {
 					first, again)
 			}
 		}
-		if !strings.Contains(first.Error(), "[deepseek/chat deepseek/v4-pro]") {
+		if !strings.Contains(first.Error(), "[deepseek-flash deepseek-v4-pro]") {
 			t.Errorf("已声明列表未按字典序输出: %v", first)
 		}
 	})

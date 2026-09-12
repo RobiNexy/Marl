@@ -121,7 +121,7 @@ func (c *Config) Validate() error {
 //	ladder:
 //	  - id: "r0"
 //	    endpoint: "deepseek-main"
-//	    model: "deepseek/chat"
+//	    model: "deepseek-flash"
 //	    thinking: {level: "off"}     # 或块式 thinking: level: ...
 //	    description: "..."
 //	    cost_per_mtok: 1.0

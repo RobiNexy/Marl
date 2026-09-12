@@ -177,7 +177,7 @@ func (a *DeepSeekChatAdapter) ID() types.WireID { return types.WireOpenAIChat }
 // EndpointName 返回本适配器服务的接入点名（供装配期自检与探测报告使用）。
 func (a *DeepSeekChatAdapter) EndpointName() string { return a.cfg.EndpointName }
 
-// ModelName 把内部模型 id 翻译成远端模型名（如 deepseek/chat → deepseek-flash）。
+// ModelName 把内部模型 id 翻译成远端模型名（如 deepseek-flash → deepseek-flash）。
 //
 // 失败：modelID 为空、未在映射表里、映射到空名三种。**不回落**成默认名或原样
 // 透传：调用到一个语义不同但名字相近的模型时，请求本身没有任何异常迹象，

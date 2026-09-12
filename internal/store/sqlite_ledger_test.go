@@ -135,7 +135,7 @@ func TestModelSwitchAudit(t *testing.T) {
 	ctx := context.Background()
 	s := newLedgerStore(t)
 	ev := &ModelSwitchEvent{
-		AgentID: "a1", TaskID: "t1", FromModel: "deepseek/chat", ToModel: "deepseek/v4-pro",
+		AgentID: "a1", TaskID: "t1", FromModel: "deepseek-flash", ToModel: "deepseek-v4-pro",
 		Reason: "evidence", CacheHitsBefore: 768, CacheWritesBefore: 100,
 	}
 	if err := s.RecordModelSwitch(ctx, ev); err != nil {
@@ -148,7 +148,7 @@ func TestModelSwitchAudit(t *testing.T) {
 	if err != nil || len(got) != 1 {
 		t.Fatalf("query: %v %v", got, err)
 	}
-	if got[0].ToModel != "deepseek/v4-pro" || got[0].CacheHitsBefore != 768 {
+	if got[0].ToModel != "deepseek-v4-pro" || got[0].CacheHitsBefore != 768 {
 		t.Fatalf("roundtrip: %+v", got[0])
 	}
 	// 校验：缺字段拒绝。

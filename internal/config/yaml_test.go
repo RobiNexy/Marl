@@ -12,7 +12,7 @@ const sampleLadder = `# 阶梯配置（子集形态）
 ladder:
   - id: "r0"
     endpoint: "deepseek-main"
-    model: "deepseek/chat"
+    model: "deepseek-flash"
     thinking: {level: "off"}
     description: "快速、便宜，适合探索与编排"
     cost_per_mtok: 1.0
@@ -20,7 +20,7 @@ ladder:
 
   - id: "r1"
     endpoint: "deepseek-main"
-    model: "deepseek/chat"
+    model: "deepseek-flash"
     thinking:
       level: "high"
     description: "同模型开思维，缓存部分保留"
@@ -29,7 +29,7 @@ ladder:
 
   - id: "r2"
     endpoint: "deepseek-main"
-    model: "deepseek/v4-pro"
+    model: "deepseek-v4-pro"
     thinking: {level: "high"}
     description: "更强模型"
     cost_per_mtok: 4.0
@@ -51,7 +51,7 @@ func TestParseLadderShape(t *testing.T) {
 	if got, _ := r0.Get("id").Str(); got != "r0" {
 		t.Fatalf("r0.id = %q", got)
 	}
-	if got, _ := r0.Get("model").Str(); got != "deepseek/chat" {
+	if got, _ := r0.Get("model").Str(); got != "deepseek-flash" {
 		t.Fatalf("r0.model = %q", got)
 	}
 	if got, ok := r0.Get("cost_per_mtok").Float(); !ok || got != 1.0 {

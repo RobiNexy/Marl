@@ -15,7 +15,7 @@ import (
 
 const (
 	testEndpoint = "deepseek-main"
-	testModel    = "deepseek/chat"
+	testModel    = "deepseek-flash"
 	testRemote   = "deepseek-flash"
 	testBucket   = types.AgentID("agent-01")
 )

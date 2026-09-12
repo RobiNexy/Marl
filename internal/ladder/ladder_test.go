@@ -19,14 +19,14 @@ import (
 func testLadderCfg() *Config {
 	return &Config{
 		Pricing: map[string]wire.Pricing{
-			"deepseek/chat":   {InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"},
-			"deepseek/v4-pro": {InPerMTok: 4.0, CachedInPerMTok: 1.0, OutPerMTok: 8.0, ReasoningPerMTok: 8.0, Currency: "CNY"},
+			"deepseek-flash":   {InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"},
+			"deepseek-v4-pro": {InPerMTok: 4.0, CachedInPerMTok: 1.0, OutPerMTok: 8.0, ReasoningPerMTok: 8.0, Currency: "CNY"},
 		},
 		Ladder: &types.Ladder{
 			Rungs: []types.Rung{
-				{ID: "r0", Endpoint: "ep", Model: "deepseek/chat", CostPerMTok: 1.0, Currency: "CNY"},
-				{ID: "r1", Endpoint: "ep", Model: "deepseek/chat", CostPerMTok: 1.0, Currency: "CNY"},
-				{ID: "r2", Endpoint: "ep", Model: "deepseek/v4-pro", CostPerMTok: 4.0, Currency: "CNY"},
+				{ID: "r0", Endpoint: "ep", Model: "deepseek-flash", CostPerMTok: 1.0, Currency: "CNY"},
+				{ID: "r1", Endpoint: "ep", Model: "deepseek-flash", CostPerMTok: 1.0, Currency: "CNY"},
+				{ID: "r2", Endpoint: "ep", Model: "deepseek-v4-pro", CostPerMTok: 4.0, Currency: "CNY"},
 			},
 			Start: "r0",
 		},
@@ -43,7 +43,7 @@ func testCatalog(t *testing.T, cfg *Config) *StaticCatalog {
 	cat := NewStaticCatalog(cfg.Ladder)
 	for _, m := range []wire.ModelEntry{
 		{
-			ID: "deepseek/chat", Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: "deepseek-flash",
+			ID: "deepseek-flash", Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: "deepseek-flash",
 			Caps: wire.ModelCaps{
 				Has: []types.Capability{types.CapToolCall, types.CapJSONMode, types.CapThinking},
 				MaxContext: 65536, MaxOutput: 8192,
@@ -54,7 +54,7 @@ func testCatalog(t *testing.T, cfg *Config) *StaticCatalog {
 			Pricing: wire.Pricing{InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"},
 		},
 		{
-			ID: "deepseek/v4-pro", Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: "deepseek-v4-pro",
+			ID: "deepseek-v4-pro", Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: "deepseek-v4-pro",
 			Caps: wire.ModelCaps{
 				Has: []types.Capability{types.CapToolCall, types.CapJSONMode, types.CapThinking},
 				MaxContext: 65536, MaxOutput: 8192,
@@ -92,20 +92,20 @@ func TestParseLadderYAML(t *testing.T) {
 	src := []byte(`ladder:
   - id: "r0"
     endpoint: "deepseek-main"
-    model: "deepseek/chat"
+    model: "deepseek-flash"
     thinking: {level: "off"}
     description: "cheap"
     cost_per_mtok: 1.0
     currency: "CNY"
   - id: "r1"
     endpoint: "deepseek-main"
-    model: "deepseek/chat"
+    model: "deepseek-flash"
     thinking:
       level: "high"
     cost_per_mtok: 1.0
     currency: "CNY"
 pricing:
-  - model: "deepseek/chat"
+  - model: "deepseek-flash"
     in_per_mtok: 1.0
     cached_in_per_mtok: 0.25
     out_per_mtok: 2.0
@@ -127,7 +127,7 @@ start: "r0"
 		t.Fatalf("IndexOf broken")
 	}
 	// 分项计价（Part 10.4 形态）。
-	p := cfg.Pricing["deepseek/chat"]
+	p := cfg.Pricing["deepseek-flash"]
 	if p.InPerMTok != 1.0 || p.CachedInPerMTok != 0.25 || p.OutPerMTok != 2.0 || p.ReasoningPerMTok != 2.0 || p.Currency != "CNY" {
 		t.Fatalf("pricing: %+v", p)
 	}
@@ -391,7 +391,7 @@ func TestRouterUpgradeStartIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.RungID != "r2" || b.Model != "deepseek/v4-pro" {
+	if b.RungID != "r2" || b.Model != "deepseek-v4-pro" {
 		t.Fatalf("top bind: %+v", b)
 	}
 }
@@ -442,13 +442,13 @@ func TestStaticCatalogOverrides(t *testing.T) {
 	cat := testCatalog(t, cfg)
 	// 覆盖：实测发现 chat 不支持 JSON mode（整集替换）。
 	if err := cat.AddOverride(wire.CapsOverride{
-		Model: "deepseek/chat", Endpoint: "ep",
+		Model: "deepseek-flash", Endpoint: "ep",
 		Has:      []types.Capability{types.CapToolCall},
 		ProbedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	caps, err := cat.EffectiveCaps("deepseek/chat", "ep")
+	caps, err := cat.EffectiveCaps("deepseek-flash", "ep")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,14 +456,14 @@ func TestStaticCatalogOverrides(t *testing.T) {
 		t.Fatalf("override not applied: %+v", caps)
 	}
 	// 未覆盖的 (model, endpoint) 组合取声明值。
-	caps, err = cat.EffectiveCaps("deepseek/v4-pro", "ep")
+	caps, err = cat.EffectiveCaps("deepseek-v4-pro", "ep")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(caps.Has) != 3 {
 		t.Fatalf("declared caps: %+v", caps)
 	}
-	if err := cat.AddModel(wire.ModelEntry{ID: "deepseek/chat"}); err == nil {
+	if err := cat.AddModel(wire.ModelEntry{ID: "deepseek-flash"}); err == nil {
 		t.Fatal("duplicate model must be rejected")
 	}
 }

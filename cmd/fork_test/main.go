@@ -130,7 +130,7 @@ func run(o options) error {
 	ladderCfg := singleRungLadder(o)
 	cat := ladder.NewStaticCatalog(ladderCfg.Ladder)
 	if err := cat.AddModel(wire.ModelEntry{
-		ID: "deepseek/chat", Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: "deepseek-flash",
+		ID: "deepseek-flash", Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: "deepseek-flash",
 		Caps: wire.ModelCaps{
 			Has:             []types.Capability{types.CapToolCall, types.CapJSONMode, types.CapThinking},
 			MaxContext:      65536, MaxOutput: 8192,
@@ -151,7 +151,7 @@ func run(o options) error {
 		EndpointName: "deepseek-main",
 		BaseURL:      o.baseURL,
 		APIKey:       key,
-		RemoteNames:  map[string]string{"deepseek/chat": "deepseek-flash"},
+		RemoteNames:  map[string]string{"deepseek-flash": "deepseek-flash"},
 		BucketField:  wire.DefaultBucketField,
 	})
 	if err != nil {
@@ -266,11 +266,11 @@ func run(o options) error {
 func singleRungLadder(o options) *ladder.Config {
 	return &ladder.Config{
 		Pricing: map[string]wire.Pricing{
-			"deepseek/chat": {InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"},
+			"deepseek-flash": {InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"},
 		},
 		Ladder: &types.Ladder{
 			Rungs: []types.Rung{{
-				ID: "r0", Endpoint: "deepseek-main", Model: "deepseek/chat",
+				ID: "r0", Endpoint: "deepseek-main", Model: "deepseek-flash",
 				CostPerMTok: 1.5, Currency: "CNY",
 			}},
 			Start: "r0",

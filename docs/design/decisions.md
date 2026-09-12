@@ -909,3 +909,42 @@ fork 稳定性）、真机跑（`fork_test`：父 fork 子 → 子只读 report 
 **依据**：`internal/fossil` 的测试矩阵（真实 fossil 二进制）、
 `cmd/marl init` 端到端测试、真机 fork_test（子写文件 → 父 commit →
 `fossil ls` 可见子写的 summary.txt，author=agent）。
+
+---
+
+## ADR-0031：内部模型 id = 厂商现行名（消灭 "deepseek/chat" 翻译间接层）
+
+**状态**：Accepted（2026-09-12；用户在阶段 6 评审中指出 ladder-mini.yaml 的
+`deepseek/chat` 看起来像早已废弃的 `deepseek-chat`，引发对测试真实性的质疑）
+
+**事实澄清（先于决策）**：
+
+- 线路上发出的模型名**从来不是** `deepseek-chat`：内部 id `deepseek/chat` 经
+  `RemoteNames` 在发请求前翻译为 `deepseek-flash`。证据链：
+  `docs/design/probe-run-record-phase1*.md` 的逐字节请求体（78 处
+  `"model":"deepseek-flash"`）、厂商响应的 `system_fingerprint` 与请求 id、
+  2026-09-12 的实时 curl 复核（本 ADR 记录时重跑，厂商正常返回）。
+- 厂商文档（docs/deepseek-api/chat-complete.html）的 deprecated 标记针对
+  `frequency_penalty`/`presence_penalty` **参数**，不是模型名；现行模型是
+  `deepseek-flash` / `deepseek-v4-pro`。
+
+**决策**：尽管线路流量正确，命名陷阱必须拆除——内部 id `deepseek/chat` 与
+废弃的厂商名 `deepseek-chat` 只差一个斜杠，任何读配置/读代码的人（包括
+框架作者自己）都会误读，且已经实际造成过一次排障浪费（fork_test 的
+"no pricing for model" 报错被误判为模型名错误）。因此：
+
+1. 内部模型 id 直接采用**厂商现行名**：`deepseek-flash` / `deepseek-v4-pro`。
+   内部 id 与 remote_name 恒等（RemoteNames 机制保留——厂商将来改名时只改
+   配置里的 remote 映射，不改代码引用）。
+2. 全代码库替换（39 处 Go + 配置 + 设计文档 §7.1/§10.4 等 12 处）；
+   `probe-run-record-phase1*.md` 是**历史实测记录，逐字节保留不改**——
+   改了就不再是"当时的记录"。
+3. 缓存键形态随之变化（`deepseek-flash@deepseek-main`）：内部 id 进缓存键，
+   改名 = 全项目缓存前缀一次性失效（ADR-0015 预期的成本，一次性付出）。
+
+**教训（写给后续阶段）**：内部命名不应模仿厂商命名的历史形态——"看起来像
+废弃名"与"是废弃名"在评审者眼里无法区分，而解释成本每次评审都要付一次。
+命名选择要按"最坏误读"而不是"最准确语义"来淘汰。
+
+**依据**：实时 curl 复核（2026-09-12T17:29+08:00，`deepseek-flash` 正常返回）、
+改名后全量测试通过、真机 mini 复跑（厂商 tool_call id + 真实仓库目录内容）。

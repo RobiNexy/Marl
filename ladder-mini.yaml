@@ -3,14 +3,14 @@
 ladder:
   - id: "r0"
     endpoint: "deepseek-main"
-    model: "deepseek/chat"
+    model: "deepseek-flash"
     thinking: {level: "off"}
     description: "快速、便宜，适合探索与编排"
     cost_per_mtok: 1.5
     currency: "CNY"
   - id: "r1"
     endpoint: "deepseek-main"
-    model: "deepseek/chat"
+    model: "deepseek-flash"
     thinking:
       level: "high"
     description: "同模型开思维，缓存部分保留"
@@ -18,19 +18,19 @@ ladder:
     currency: "CNY"
   - id: "r2"
     endpoint: "deepseek-main"
-    model: "deepseek/v4-pro"
+    model: "deepseek-v4-pro"
     thinking: {level: "high"}
     description: "更强模型，适合复杂推理"
     cost_per_mtok: 6.0
     currency: "CNY"
 pricing:
-  - model: "deepseek/chat"
+  - model: "deepseek-flash"
     in_per_mtok: 1.0
     cached_in_per_mtok: 0.25
     out_per_mtok: 2.0
     reasoning_per_mtok: 2.0
     currency: "CNY"
-  - model: "deepseek/v4-pro"
+  - model: "deepseek-v4-pro"
     in_per_mtok: 4.0
     cached_in_per_mtok: 1.0
     out_per_mtok: 8.0

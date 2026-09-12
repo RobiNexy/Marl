@@ -70,8 +70,8 @@ func newTestRecorder(t *testing.T) (*Recorder, *store.SQLiteStore, *fakeCatalog)
 	}
 	t.Cleanup(func() { s.Close() })
 	cat := &fakeCatalog{pricing: map[string]wire.Pricing{
-		"deepseek/chat":   testPricing(),
-		"deepseek/v4-pro": {InPerMTok: 4.0, CachedInPerMTok: 1.0, OutPerMTok: 8.0, ReasoningPerMTok: 8.0, Currency: "CNY"},
+		"deepseek-flash":   testPricing(),
+		"deepseek-v4-pro": {InPerMTok: 4.0, CachedInPerMTok: 1.0, OutPerMTok: 8.0, ReasoningPerMTok: 8.0, Currency: "CNY"},
 	}}
 	rec, err := New(s, cat)
 	if err != nil {
@@ -85,11 +85,11 @@ func TestRecorderRecordsCost(t *testing.T) {
 	rec, s, _ := newTestRecorder(t)
 
 	u := &types.TokenUsage{PromptTokens: 1000, CompletionTokens: 500, ReasoningTokens: 200, CacheReadTokens: 400}
-	if err := rec.RecordMain(ctx, "t1", "a1", testBinding("r0", "deepseek/chat"), u); err != nil {
+	if err := rec.RecordMain(ctx, "t1", "a1", testBinding("r0", "deepseek-flash"), u); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 	// 编排入口强制类别。
-	if err := rec.RecordOrchestration(ctx, "t1", "a1", testBinding("r0", "deepseek/chat"), u); err != nil {
+	if err := rec.RecordOrchestration(ctx, "t1", "a1", testBinding("r0", "deepseek-flash"), u); err != nil {
 		t.Fatal(err)
 	}
 	sum, err := s.TaskSummary(ctx, "t1")
@@ -103,7 +103,7 @@ func TestRecorderRecordsCost(t *testing.T) {
 		t.Fatalf("cost must be positive: %v", sum.TotalCost)
 	}
 	// 用量未知不记账（≠ 0）。
-	if err := rec.RecordMain(ctx, "t1", "a1", testBinding("r0", "deepseek/chat"), nil); err != nil {
+	if err := rec.RecordMain(ctx, "t1", "a1", testBinding("r0", "deepseek-flash"), nil); err != nil {
 		t.Fatalf("nil usage must be a silent skip: %v", err)
 	}
 	sum2, _ := s.TaskSummary(ctx, "t1")
@@ -131,24 +131,24 @@ func TestRenderReport(t *testing.T) {
 	ctx := context.Background()
 	rec, s, _ := newTestRecorder(t)
 	// r0 两次 + 编排一次；r1 一次（含思维链）。
-	if err := rec.RecordMain(ctx, "t1", "a1", testBinding("r0", "deepseek/chat"),
+	if err := rec.RecordMain(ctx, "t1", "a1", testBinding("r0", "deepseek-flash"),
 		&types.TokenUsage{PromptTokens: 45000, CompletionTokens: 3000, CacheReadTokens: 35000}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.RecordMain(ctx, "t1", "a1", testBinding("r0", "deepseek/chat"),
+	if err := rec.RecordMain(ctx, "t1", "a1", testBinding("r0", "deepseek-flash"),
 		&types.TokenUsage{PromptTokens: 45000, CompletionTokens: 3000, CacheReadTokens: 35000}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.RecordOrchestration(ctx, "t1", "a1", testBinding("r0", "deepseek/chat"),
+	if err := rec.RecordOrchestration(ctx, "t1", "a1", testBinding("r0", "deepseek-flash"),
 		&types.TokenUsage{PromptTokens: 3000, CompletionTokens: 500}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.RecordMain(ctx, "t1", "a1", testBinding("r1", "deepseek/chat"),
+	if err := rec.RecordMain(ctx, "t1", "a1", testBinding("r1", "deepseek-flash"),
 		&types.TokenUsage{PromptTokens: 8000, CompletionTokens: 9000, ReasoningTokens: 3400, CacheReadTokens: 4000}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RecordModelSwitch(ctx, &store.ModelSwitchEvent{
-		AgentID: "a1", TaskID: "t1", FromModel: "deepseek/chat", ToModel: "deepseek/chat",
+		AgentID: "a1", TaskID: "t1", FromModel: "deepseek-flash", ToModel: "deepseek-flash",
 		Reason: "evidence score 0.80 >= threshold 0.80",
 	}); err != nil {
 		t.Fatal(err)

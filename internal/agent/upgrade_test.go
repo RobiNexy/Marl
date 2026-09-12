@@ -101,12 +101,12 @@ func setupUpgrade(t *testing.T) (*Agent, *fakeLLM, *store.SQLiteStore, *ladder.C
 func testLadderCfg2() *ladder.Config {
 	return &ladder.Config{
 		Pricing: map[string]wire.Pricing{
-			"deepseek/chat": {InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"},
+			"deepseek-flash": {InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"},
 		},
 		Ladder: &types.Ladder{
 			Rungs: []types.Rung{
-				{ID: "r0", Endpoint: "ep", Model: "deepseek/chat", CostPerMTok: 1.0, Currency: "CNY"},
-				{ID: "r1", Endpoint: "ep", Model: "deepseek/chat", CostPerMTok: 1.0, Currency: "CNY"},
+				{ID: "r0", Endpoint: "ep", Model: "deepseek-flash", CostPerMTok: 1.0, Currency: "CNY"},
+				{ID: "r1", Endpoint: "ep", Model: "deepseek-flash", CostPerMTok: 1.0, Currency: "CNY"},
 			},
 			Start: "r0",
 		},
@@ -121,7 +121,7 @@ func testCatalog2(t *testing.T, cfg *ladder.Config) *ladder.StaticCatalog {
 	t.Helper()
 	cat := ladder.NewStaticCatalog(cfg.Ladder)
 	if err := cat.AddModel(wire.ModelEntry{
-		ID: "deepseek/chat", Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: "deepseek-flash",
+		ID: "deepseek-flash", Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: "deepseek-flash",
 		Caps: wire.ModelCaps{
 			Has:             []types.Capability{types.CapToolCall, types.CapJSONMode, types.CapThinking},
 			MaxContext:      65536, MaxOutput: 8192,

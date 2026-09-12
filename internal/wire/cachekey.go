@@ -28,7 +28,7 @@ import (
 // 用途：types.Binding.CachePrefix 必须由本函数派生（Binding 的不变量：
 // "CachePrefix 与 (Model, Endpoint) 一致——它是纯派生值，不允许手工拼装"）。
 // Router 在阶段 4 绑定时调用它，因此这里先把格式钉死：手工拼装出来的
-// "deepseek/chat@deepseek-main" 与 "deepseek-main/deepseek/chat" 是两个键，
+// "deepseek-flash@deepseek-main" 与 "deepseek-main/deepseek-flash" 是两个键，
 // 而它们指向同一个模型——缓存分片就这么无声无息地多了一份。
 //
 // 格式：<model>@<endpoint>。分隔符选 '@' 是因为模型 id 用 '/'（provider/name）、

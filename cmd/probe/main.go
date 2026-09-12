@@ -69,7 +69,7 @@ import (
 const (
 	defaultEndpoint    = "deepseek-main"
 	defaultBaseURL     = "https://api.deepseek.com/v1"
-	defaultModelID     = "deepseek/chat"
+	defaultModelID     = "deepseek-flash"
 	defaultRemote      = "deepseek-flash"
 	defaultAPIKeyEnv   = "DEEPSEEK_API_KEY"
 	defaultBucket      = "probe-agent-01"

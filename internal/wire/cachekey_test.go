@@ -18,10 +18,10 @@ import (
 // 它是审计与命中率统计的对外口径，不能随手改。
 func TestCachePrefix(t *testing.T) {
 	const (
-		model    = "deepseek/chat"
+		model    = "deepseek-flash"
 		endpoint = "deepseek-main"
 		otherEp  = "deepseek-mirror"
-		otherMdl = "deepseek/v4-pro"
+		otherMdl = "deepseek-v4-pro"
 	)
 	base := ModelCachePrefix(model, endpoint)
 
@@ -81,11 +81,11 @@ func TestCachePrefix(t *testing.T) {
 	})
 
 	t.Run("格式 golden（对外口径，改动需 ADR）", func(t *testing.T) {
-		if base != "deepseek/chat@deepseek-main" {
-			t.Errorf("ModelCachePrefix 格式变了：得到 %q，期望 %q（这是审计/命中率统计的口径）", base, "deepseek/chat@deepseek-main")
+		if base != "deepseek-flash@deepseek-main" {
+			t.Errorf("ModelCachePrefix 格式变了：得到 %q，期望 %q（这是审计/命中率统计的口径）", base, "deepseek-flash@deepseek-main")
 		}
-		if key := CacheKey(model, endpoint, types.AgentID("agent-01")); key != "deepseek/chat@deepseek-main#agent-01" {
-			t.Errorf("CacheKey 格式变了：得到 %q，期望 %q", key, "deepseek/chat@deepseek-main#agent-01")
+		if key := CacheKey(model, endpoint, types.AgentID("agent-01")); key != "deepseek-flash@deepseek-main#agent-01" {
+			t.Errorf("CacheKey 格式变了：得到 %q，期望 %q", key, "deepseek-flash@deepseek-main#agent-01")
 		}
 	})
 }

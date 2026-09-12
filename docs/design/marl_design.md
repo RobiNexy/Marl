@@ -1256,20 +1256,20 @@ type PromptEntry struct {
 ladder:
   - id: "r0"
     endpoint: "deepseek-main"
-    model: "deepseek/chat"           # → deepseek-flash
+    model: "deepseek-flash"           # → deepseek-flash
     thinking: {level: "off"}
     description: "快速、便宜，适合探索与编排"
     cost_per_mtok: 1.0               # 仅用于排序，权威价格在 models.yaml 的 pricing
 
   - id: "r1"
     endpoint: "deepseek-main"
-    model: "deepseek/chat"           # 同一模型开思维：档位不在缓存键内，前缀部分保留
+    model: "deepseek-flash"           # 同一模型开思维：档位不在缓存键内，前缀部分保留
     thinking: {level: "high"}
     description: "同模型开思维，缓存部分保留"
 
   - id: "r2"
     endpoint: "deepseek-main"
-    model: "deepseek/v4-pro"         # → deepseek-v4-pro：换 model_id，缓存重建
+    model: "deepseek-v4-pro"         # → deepseek-v4-pro：换 model_id，缓存重建
     thinking: {level: "high"}
     description: "更强模型，适合复杂推理"
 
@@ -2082,7 +2082,7 @@ const (
 # max_output 是**待核实**值：厂商文档只给了 max_tokens 上限与默认输出（1~384K；
 # 默认 8K 非思考 / 64K 思考 / 128K max 档），上下文长度在"模型与价格"页（未快照）。
 models:
-  - id: "deepseek/chat"
+  - id: "deepseek-flash"
     provider: "deepseek"
     wire: "openai_chat"
     remote_name: "deepseek-flash"
@@ -2101,7 +2101,7 @@ models:
       reasoning_per_mtok: 2.0
       currency: "CNY"
 
-  - id: "deepseek/v4-pro"
+  - id: "deepseek-v4-pro"
     provider: "deepseek"
     wire: "openai_chat"
     remote_name: "deepseek-v4-pro"
@@ -2194,19 +2194,19 @@ endpoints:
 ladder:
   - id: "r0"
     endpoint: "deepseek-main"
-    model: "deepseek/chat"
+    model: "deepseek-flash"
     thinking: {level: "off"}
     description: "快速、便宜，适合探索与编排"
 
   - id: "r1"
     endpoint: "deepseek-main"
-    model: "deepseek/chat"
+    model: "deepseek-flash"
     thinking: {level: "high"}
     description: "同模型开思维，缓存部分保留（档位不在缓存键内）"
 
   - id: "r2"
     endpoint: "deepseek-main"
-    model: "deepseek/v4-pro"
+    model: "deepseek-v4-pro"
     thinking: {level: "high"}
     description: "更强模型，换 model_id，缓存重建"
 
@@ -2550,7 +2550,7 @@ Catalog 里的 `Caps` 是**声明**，声明会错（文档滞后、endpoint 转
 ```yaml
 # ~/.local/state/marl/caps_override.yaml（机器级，不进版本控制）
 overrides:
-  - model: "deepseek/chat"
+  - model: "deepseek-flash"
     endpoint: "deepseek-main"
     caps_override:
       has: [tool_call, json_mode]  # 实测发现不支持 thinking（或当前版本关了）
@@ -3722,7 +3722,7 @@ L0 达标判据、哨兵、配对不变量、账本落点）见 ADR-0026。要�
   - 能力探测（probe）
 ```
 
-**交付检查**：配置 `ladder.yaml`（r0 = `deepseek/chat` 关 thinking、r1 = `deepseek/chat` 开 thinking、r2 = `deepseek/v4-pro`），`go run cmd/mini` 跑一个会失败的任务，观察到升级日志，`go run cmd/ladder_report` 输出分项成本。
+**交付检查**：配置 `ladder.yaml`（r0 = `deepseek-flash` 关 thinking、r1 = `deepseek-flash` 开 thinking、r2 = `deepseek-v4-pro`），`go run cmd/mini` 跑一个会失败的任务，观察到升级日志，`go run cmd/ladder_report` 输出分项成本。
 
 **这一步结束时**：阶梯机制闭环。Ledger 能看出"哪个阶梯花了多少钱"，能验证"升级是否真的省钱"。
 
