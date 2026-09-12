@@ -19,7 +19,7 @@ import (
 func testLadderCfg() *Config {
 	return &Config{
 		Pricing: map[string]wire.Pricing{
-			"deepseek-flash":   {InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"},
+			"deepseek-flash":  {InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"},
 			"deepseek-v4-pro": {InPerMTok: 4.0, CachedInPerMTok: 1.0, OutPerMTok: 8.0, ReasoningPerMTok: 8.0, Currency: "CNY"},
 		},
 		Ladder: &types.Ladder{
@@ -45,7 +45,7 @@ func testCatalog(t *testing.T, cfg *Config) *StaticCatalog {
 		{
 			ID: "deepseek-flash", Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: "deepseek-flash",
 			Caps: wire.ModelCaps{
-				Has: []types.Capability{types.CapToolCall, types.CapJSONMode, types.CapThinking},
+				Has:        []types.Capability{types.CapToolCall, types.CapJSONMode, types.CapThinking},
 				MaxContext: 65536, MaxOutput: 8192,
 				CacheMode:       wire.CacheImplicitPrefix,
 				ThinkingControl: wire.ThinkControlLevel,
@@ -56,7 +56,7 @@ func testCatalog(t *testing.T, cfg *Config) *StaticCatalog {
 		{
 			ID: "deepseek-v4-pro", Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: "deepseek-v4-pro",
 			Caps: wire.ModelCaps{
-				Has: []types.Capability{types.CapToolCall, types.CapJSONMode, types.CapThinking},
+				Has:        []types.Capability{types.CapToolCall, types.CapJSONMode, types.CapThinking},
 				MaxContext: 65536, MaxOutput: 8192,
 				CacheMode:       wire.CacheImplicitPrefix,
 				ThinkingControl: wire.ThinkControlLevel,

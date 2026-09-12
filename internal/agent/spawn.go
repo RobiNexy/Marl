@@ -29,12 +29,56 @@ const (
 // spawnArgs 是 spawn_subagent 的参数形态（schema 的镜像；解析失败的字段
 // 按缺失处理，必填项缺失在裁决前拦截）。
 type spawnArgs struct {
-	ProfileID   string   `json:"profile_id"`
-	Task        string   `json:"task"`
-	Writable    []string `json:"writable_paths"`
-	Readable    []string `json:"readable_paths"`
-	Prompt      string   `json:"prompt_override"`
-	InjectSeqs  []int64  `json:"inject_message_seqs"`
+	ProfileID  string   `json:"profile_id"`
+	Task       string   `json:"task"`
+	Writable   []string `json:"writable_paths"`
+	Readable   []string `json:"readable_paths"`
+	Prompt     string   `json:"prompt_override"`
+	InjectSeqs []int64  `json:"inject_message_seqs"`
+}
+
+// spawnItemArgs 是 spawn_batch 里单个子的参数形态（单 spawn 的镜像子集）。
+type spawnItemArgs struct {
+	ProfileID  string   `json:"profile_id"`
+	Task       string   `json:"task"`
+	Writable   []string `json:"writable_paths"`
+	Readable   []string `json:"readable_paths"`
+	Prompt     string   `json:"prompt_override"`
+	InjectSeqs []int64  `json:"inject_message_seqs"`
+}
+
+// batchArgs 是 spawn_batch 的参数形态（阶段 9"spawn_batch 工具"）。
+type batchArgs struct {
+	Items []spawnItemArgs `json:"items"`
+	Await string          `json:"await"`
+	N     int             `json:"n"`
+}
+
+// buildSpawnRequest 把（单项）参数折算成 SpawnRequest（单一换算点：
+// 单 spawn 与批量 spawn 共享——两处的裁决语义由 Spawner 独有，这里只
+// 做参数到请求的映射）。返回 nil 表示该参数不合法（已给出原因）。
+func buildSpawnRequest(requester types.AgentID, item spawnItemArgs) (*proto.SpawnRequest, string) {
+	if item.Task == "" {
+		return nil, "task 描述不能为空：子 Agent 需要知道做什么"
+	}
+	return &proto.SpawnRequest{
+		RequesterID:     requester,
+		ProfileID:       types.ProfileID(item.ProfileID),
+		PromptOverride:  item.Prompt,
+		TaskDescription: item.Task,
+		WritablePaths:   item.Writable,
+		ReadablePaths:   item.Readable,
+		InjectMessages:  item.InjectSeqs,
+		TraceID:         types.TraceID(fmt.Sprintf("spawn-%s", requester)),
+	}, ""
+}
+
+// batchRejects 是批量裁决的逐项失败记录（回填给模型的纠错依据——
+// Part 9.4 的逐项形态：哪一项因什么被拒，父可修一份重派）。
+type batchRejects struct {
+	Index  int    `json:"index"`
+	Code   string `json:"code"`
+	Reason string `json:"reason"`
 }
 
 // reportArgs 是 report_to_parent 的参数形态（Part 9.6 的 schema）。
@@ -52,6 +96,8 @@ func (a *Agent) executeIntent(ctx context.Context, call types.ToolCall) (*skill.
 	switch call.Name {
 	case proto.ToolSpawnSubagent:
 		return a.intentSpawn(ctx, call)
+	case proto.ToolSpawnBatch:
+		return a.intentSpawnBatch(ctx, call)
 	case proto.ToolReportToParent:
 		return a.intentReport(ctx, call)
 	case proto.ToolRequestDiscussion:
@@ -81,16 +127,14 @@ func (a *Agent) intentSpawn(ctx context.Context, call types.ToolCall) (*skill.Sk
 	if args.Task == "" {
 		return skill.NewFailure("BAD_ARGS", "task 描述不能为空：子 Agent 需要知道做什么"), nil
 	}
-	req := &proto.SpawnRequest{
-		RequesterID:     a.id,
-		ProfileID:       types.ProfileID(args.ProfileID),
-		PromptOverride:  args.Prompt,
-		TaskDescription: args.Task,
-		WritablePaths:   args.Writable,
-		ReadablePaths:   args.Readable,
-		InjectMessages:  args.InjectSeqs,
-		TraceID:         types.TraceID(fmt.Sprintf("spawn-%s", a.id)),
+	req, invalid := buildSpawnRequest(a.id, spawnItemArgs{
+		ProfileID: args.ProfileID, Task: args.Task, Writable: args.Writable,
+		Readable: args.Readable, Prompt: args.Prompt, InjectSeqs: args.InjectSeqs,
+	})
+	if invalid != "" {
+		return skill.NewFailure("BAD_ARGS", "%s", invalid), nil
 	}
+	// 意图关口缺位即失败回填（见 intentSpawn 的注释）。
 	dec, err := a.spawner.Adjudicate(ctx, req)
 	if err != nil {
 		return nil, err // 框架级故障上抛（与"请求不合规"严格区分，Part 9.2）
@@ -111,6 +155,106 @@ func (a *Agent) intentSpawn(ctx context.Context, call types.ToolCall) (*skill.Sk
 		"child_agent_id": string(dec.ChildAgentID),
 		"message":        "子 Agent 已启动；它完成后会 report，你将收到它的结果。在此期间你不会收到任何中间输出。",
 	}), nil
+}
+
+// intentSpawnBatch 处理 spawn_batch（Part 9.7 的批量形态，13.11 阶段 9）：
+//
+//	逐项过 Spawner 裁决（命名空间子集 / 扇出闸 / 注入合法性都与单项同一
+//	关口——批量不批发豁免）；
+//	部分拒绝合法：已批准的照常启动，拒绝项逐项回填（batchRejects）——
+//	"全部或无"会强迫模型为了一个坏参数放弃 N-1 个好子任务；
+//	失败归因：单批的裁决以一个 tool_result 汇总回填（批量是父的规划
+//	动作，不是子间的协调协议）。
+//
+// 恢复策略（await）写在 agent 的 wait 状态里（wait.go）：all / any / n。
+// 全部被拒 → errWaitChildren 不会发生（pending 空 → eventLoop 继续循环）。
+func (a *Agent) intentSpawnBatch(ctx context.Context, call types.ToolCall) (*skill.SkillResult, error) {
+	if a.spawner == nil {
+		return skill.NewFailure(ErrNoSpawner, "spawn_batch 没有可用的裁决关口（框架装配缺失）"), nil
+	}
+	var args batchArgs
+	if len(call.Arguments) > 0 {
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			a.roundFormatErrors++
+			return skill.NewFailure("BAD_ARGS", "arguments not valid JSON: %v", err), nil
+		}
+	}
+	if len(args.Items) == 0 {
+		return skill.NewFailure("BAD_ARGS", "items 不能为空：至少要派一个子 Agent"), nil
+	}
+	// await 的启动期校验（fail fast 在裁决之前——批量被部分批准后再发现
+	// 策略参数非法，已跑起来的子资源无法收回）。
+	kind := WaitAll
+	n := 0
+	switch args.Await {
+	case "", "all":
+		kind = WaitAll
+	case "any":
+		kind = WaitAny
+	case "n":
+		kind = WaitN
+		if args.N < 1 || args.N >= len(args.Items) {
+			return skill.NewFailure("BAD_ARGS", "await=n 需要 1..%d 的 n", len(args.Items)), nil
+		}
+		n = args.N
+	default:
+		return skill.NewFailure("BAD_ARGS", "await 只能取 all / any / n"), nil
+	}
+	approved := 0
+	rejects := make([]batchRejects, 0)
+	for i, item := range args.Items {
+		req, invalid := buildSpawnRequest(a.id, item)
+		if invalid != "" {
+			rejects = append(rejects, batchRejects{Index: i, Code: "BAD_ARGS", Reason: invalid})
+			continue
+		}
+		dec, err := a.spawner.Adjudicate(ctx, req)
+		if err != nil {
+			// 框架级故障：批量的部分已完成项已跑（批准即启动），错误
+			// 上抛由 eventLoop 终结————父下一轮重派前先收 report。
+			return nil, fmt.Errorf("spawn batch item %d: %w", i, err)
+		}
+		if dec.Status == proto.SpawnRejected {
+			rejects = append(rejects, batchRejects{Index: i, Code: string(dec.Code), Reason: dec.Reason})
+			continue
+		}
+		a.mu.Lock()
+		a.pendingChildren[dec.ChildAgentID] = true
+		a.childrenStatus[dec.ChildAgentID] = types.ChildRunning
+		a.mu.Unlock()
+		approved++
+	}
+	a.setWait(kind, n)
+	a.auditf(ctx, "spawn_batch", fmt.Sprintf("items=%d", len(args.Items)), map[string]any{
+		"agent_id": string(a.id), "approved": approved, "rejected": len(rejects),
+		"await": args.Await, "requester": string(a.id),
+	})
+	if approved == 0 {
+		// 全军覆没：拒绝清单逐项回传（模型自己决定放弃或修正）。
+		rejJSON, _ := json.Marshal(rejects)
+		return skill.NewFailure("SPAWN_ALL_REJECTED", "全部 %d 项都被拒绝：%s", len(rejects), rejJSON), nil
+	}
+	data := map[string]any{
+		"approved":        approved,
+		"child_agent_ids": a.childrenSnapshotIDs(),
+		"message":         "批量已启动。子 Agent 各自完成后 report；按 await 判据恢复。",
+	}
+	if len(rejects) > 0 {
+		rejJSON, _ := json.Marshal(rejects)
+		data["rejected_items"] = json.RawMessage(rejJSON)
+	}
+	return skill.NewSuccess(data), nil
+}
+
+// childrenSnapshotIDs 是当前 pending 子的 ID 快照（批量结果回显）。
+func (a *Agent) childrenSnapshotIDs() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, 0, len(a.pendingChildren))
+	for id := range a.pendingChildren {
+		out = append(out, string(id))
+	}
+	return out
 }
 
 // intentReport 处理 report_to_parent（Part 9.6）：机械检查 → 投递。

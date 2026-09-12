@@ -40,6 +40,17 @@ const (
 	schemaRequestDiscussion = `{"type":"object","properties":{` +
 		`"topic":{"type":"string","description":"Discussion topic for the human"},` +
 		`"draft":{"type":"string","description":"Your proposal to discuss"}},"required":["topic","draft"]}`
+
+	schemaSpawnBatch = `{"type":"object","properties":{` +
+		`"items":{"type":"array","items":{"type":"object","properties":{` +
+		`"profile_id":{"type":"string","description":"Profile id of the child agent"},` +
+		`"task":{"type":"string","description":"Self-contained task description for the child"},` +
+		`"writable_paths":{"type":"array","items":{"type":"string"},"description":"Glob paths the child may write; MUST be a subset of your own writable scope"},` +
+		`"readable_paths":{"type":"array","items":{"type":"string"},"description":"Optional extra readable globs"},` +
+		`"prompt_override":{"type":"string","description":"Optional prompt id overriding the profile default"},` +
+		`"inject_message_seqs":{"type":"array","items":{"type":"integer"},"description":"Optional seq numbers of your log entries to inject"}}},` +
+		`"await":{"type":"string","enum":["all","any","n"],"description":"Resume you after all children report (default), after any one, or after n"},` +
+		`"n":{"type":"integer","description":"Resume threshold when await=n (1..len(items))"}},"required":["items"]}`
 )
 
 // intentSchemas 返回意图工具的协议无关定义（顺序 = proto.IntentToolNames
@@ -54,5 +65,6 @@ func intentSchemas() []wire.ToolDef {
 		{Name: "request_reconfigure", Description: "Signal that you are stuck; the framework decides ladder upgrades from evidence.", Parameters: json.RawMessage(schemaRequestReconfigure)},
 		{Name: "request_branch", Description: "Request a version-control branch for a high-risk experiment.", Parameters: json.RawMessage(schemaRequestBranch)},
 		{Name: "request_discussion", Description: "Open a human discussion branch and pause until the human approves.", Parameters: json.RawMessage(schemaRequestDiscussion)},
+		{Name: "spawn_batch", Description: "Fork several children in one call. Use when subtasks are independent and parallelizable; results arrive as one batch of reports.", Parameters: json.RawMessage(schemaSpawnBatch)},
 	}
 }

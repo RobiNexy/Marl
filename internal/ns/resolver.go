@@ -159,7 +159,13 @@ func bestMount(nsx *types.Namespace, cleanPath string) (types.Mount, types.PathM
 			mode = types.PathHidden
 		}
 		if !found || len(m.Pattern) > len(best.Pattern) ||
-			(len(m.Pattern) == len(best.Pattern) && mode == types.PathHidden && bestMode != types.PathHidden) {
+			(len(m.Pattern) == len(best.Pattern) && modeRank(m.Mode) > modeRank(bestMode)) {
+			// 平局（同长 pattern 多挂载）取能力更强的方向：挂载表是
+			// "授权集合"而非"覆盖规则"——显式请求的 write 挂载（先过
+			// Subset 裁决）不该被代表继承面的 read 挂载压制（真机踩过
+			// 的坑：孙请求的 writable 与继承的 read 同 pattern，先序的
+			// read 挂载赢得了"最具体"平局，写被静默降级成 PATH_READONLY）。
+			// 授权是合法的（裁决层已查）—— 合并方向是 max。
 			best, bestMode = m, mode
 			found = true
 		}
@@ -252,5 +258,18 @@ func realpathInRoot(abs, root string) (string, error) {
 			return "", err
 		}
 		cur = parent
+	}
+}
+
+// modeRank 是 PathMode 的能力序（hidden=0 < read=1 < write=2）；未识别
+// 值按 0（与 bestMount 的 fail-closed 契约同向）。
+func modeRank(m types.PathMode) int {
+	switch m {
+	case types.PathWrite:
+		return 2
+	case types.PathRead:
+		return 1
+	default:
+		return 0
 	}
 }

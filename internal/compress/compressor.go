@@ -642,7 +642,6 @@ func inRequest(e *types.LogEntry) bool {
 	}
 }
 
-
 // toolIs 判断条目是否为指定技能的结果（tool_result 的 Meta["name"]）。
 func toolIs(e *types.LogEntry, name string) bool {
 	if e.Role != types.RoleToolResult {

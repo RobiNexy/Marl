@@ -67,7 +67,7 @@ func TestLoopCompressesWhenHeadroomLow(t *testing.T) {
 文件内容为循环生成的行。
 
 ## 3. 文件
-- `+"`files/f01.txt`"+`
+- ` + "`files/f01.txt`" + `
 
 ## 4. 决策
 逐个读取。

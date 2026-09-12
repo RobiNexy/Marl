@@ -46,3 +46,8 @@ ladder_report
 
 # 阶段 5/8 的交付检查命令留下的本地数据（.marl-fork 同类）
 .marl-fork/
+
+# go build ./... 在仓库根留下的 cmd 可执行（阶段 9 补充）
+/marl
+/topo_test
+/discuss_loop

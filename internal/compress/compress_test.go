@@ -31,9 +31,9 @@ import (
 
 // fakeLLM 按脚本返回回复，并记录收到的请求（请求形态的断言材料）。
 type fakeLLM struct {
-	replies []string // 逐次返回；超出后重复最后一个
-	err     error    // 非空时下一次调用返回它
-	reqs    []*wire.CanonicalRequest
+	replies  []string // 逐次返回；超出后重复最后一个
+	err      error    // 非空时下一次调用返回它
+	reqs     []*wire.CanonicalRequest
 	sampling []types.SamplingParams
 }
 

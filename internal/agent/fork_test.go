@@ -13,9 +13,9 @@ import (
 	"testing"
 
 	"marl/internal/proto"
+	"marl/internal/skill"
 	"marl/internal/spawner"
 	"marl/internal/store"
-	"marl/internal/skill"
 	"marl/internal/types"
 	"marl/internal/wire"
 )
@@ -33,26 +33,35 @@ type forkFactory struct {
 	spw      *spawner.Spawner
 	chk      proto.ReportChecker
 	scriptFn func(plan *spawner.ChildPlan) []*wire.WireTurn
+	// childMaxDepth 是子的 MaxDepth 元信息（SkillEnv 的口径；硬闸在
+	// Spawner 的 cfg —— 这里只影响私有段与拒绝文案的上下文）。0 = 用
+	// Depth 同位（Multi 拓扑里显式 2）。
+	childMaxDepth int
+	// slow 非 nil 时该子使用 slowLLM（Watchdog 测试的悬停子；scriptFn
+	// 不为其服务——BuildChild 的 LLM 替换点）。
+	slow bool
 }
 
 func (f *forkFactory) BuildChild(ctx context.Context, plan *spawner.ChildPlan, req *proto.SpawnRequest) (spawner.ChildRunner, error) {
 	child, err := New(Config{
-		ID:           plan.ID,
-		ParentID:     plan.ParentID,
-		Depth:        plan.Depth,
-		MaxDepth:     1,
-		SystemPrompt: "You are a child agent; finish the task and report.",
-		MaxRounds:    6,
-		Log:          f.st,
-		Views:        f.st,
-		LLM:          &fakeLLM{turns: f.scriptFn(plan)},
-		Skills:       f.reg,
-		Namespace:    plan.Namespace,
-		Resolver:     mustResolver(f.t, f.root),
-		ProjectRoot:  f.root,
-		Sampling:     types.SamplingParams{MaxTokens: 512},
-		Spawner:      f.spw,
-		ReportSink:   f.spw,
+		ID:            plan.ID,
+		ParentID:      plan.ParentID,
+		Depth:         plan.Depth,
+		MaxDepth:      f.childMaxDepth,
+		Mailbox:       plan.Mailbox, // 阶段 9：孙的 report 路由面（多层拓扑）
+		SystemPrompt:  "You are a child agent; finish the task and report.",
+		MaxRounds:     6,
+		Log:           f.st,
+		Views:         f.st,
+		LLM:           childLLM(plan, f),
+		Skills:        f.reg,
+		Namespace:     plan.Namespace,
+		Resolver:      mustResolver(f.t, f.root),
+		ProjectRoot:   f.root,
+		Sampling:      types.SamplingParams{MaxTokens: 512},
+		TaskID:        "fork-task",
+		Spawner:       f.spw,
+		ReportSink:    f.spw,
 		ReportChecker: f.chk,
 	})
 	if err != nil {
@@ -72,6 +81,15 @@ func (f *forkFactory) BuildChild(ctx context.Context, plan *spawner.ChildPlan, r
 		return nil, err
 	}
 	return child, nil
+}
+
+// childLLM 是 BuildChild 的 LLM 替换点（普通 = 按 plan 的脚本；悬停 =
+// slowLLM——Watchdog 终止路径的测试入口）。
+func childLLM(plan *spawner.ChildPlan, f *forkFactory) LLMExecutor {
+	if f.slow {
+		return &slowLLM{}
+	}
+	return &fakeLLM{turns: f.scriptFn(plan)}
 }
 
 // setupFork 装配一套父+子可跑的完整环境。
@@ -131,6 +149,69 @@ func setupFork(t *testing.T) (*Agent, *spawner.Spawner, *forkFactory, *store.SQL
 		Sampling:     types.SamplingParams{MaxTokens: 512},
 		Mailbox:      mb,
 		Spawner:      spw,
+	})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	return parent, spw, ff, st, root
+}
+
+// setupForkMulti 是阶段 9 多层拓扑的装配：MaxDepth=2（根 → 子 → 孙），
+// depth<=1 允许 fork，子的 MaxDepth=2（SkillEnv 元信息口径）。
+func setupForkMulti(t *testing.T) (*Agent, *spawner.Spawner, *forkFactory, *store.SQLiteStore, string) {
+	t.Helper()
+	st, err := newStoreForTest(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := workspaceRoot(t)
+	if err := os.MkdirAll(filepath.Join(root, "src", "auth"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "src/main.go", "package main\n")
+	writeFile(t, root, "src/auth/oauth.go", "package auth\n")
+
+	reg := skill.NewMemRegistry()
+	for _, sk := range []skill.Skill{skill.ListDir, skill.FileRead, skill.FileWrite} {
+		if err := reg.Register(sk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chk, err := spawner.NewReportChecker(spawner.ReportCheckerConfig{Root: root, MaxScanFiles: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spw, err := spawner.New(spawner.Config{
+		MaxDepth:      2,
+		MaxActive:     16,
+		MaxForkRounds: 3,
+		// 深度权限谓词不设限（深度 2 处"到顶拒绝"的判据必须是
+		// MAX_DEPTH_REACHED——角色谓词来说和它抢第一归因位）。
+		CanSpawnAtDepth: func(int) bool { return true },
+		Log:             st,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentNS := &types.Namespace{AgentID: "parent-1", Mounts: []types.Mount{
+		{Pattern: "**", Mode: types.PathWrite},
+	}}
+	mb := spw.Bootstrap("parent-1", parentNS)
+	ff := &forkFactory{t: t, st: st, reg: reg, root: root, spw: spw, chk: chk, childMaxDepth: 2}
+	if err := spw.SetFactory(ff); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := New(Config{
+		ID:           "parent-1",
+		SystemPrompt: "You are the root; batch-fork children.",
+		MaxRounds:    8,
+		Log:          st, Views: st,
+		LLM:       &fakeLLM{},
+		Skills:    reg,
+		Namespace: parentNS,
+		Resolver:  mustResolver(t, root), ProjectRoot: root,
+		Sampling: types.SamplingParams{MaxTokens: 512},
+		Mailbox:  mb, Spawner: spw,
 	})
 	if err != nil {
 		t.Fatalf("parent: %v", err)

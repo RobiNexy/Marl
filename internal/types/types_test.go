@@ -213,20 +213,20 @@ func TestPatternCovers(t *testing.T) {
 		want          bool
 	}{
 		{"**", "anything/here", true},
-		{"src/**", "src", true},          // ** 匹配零段
+		{"src/**", "src", true}, // ** 匹配零段
 		{"src/**", "src/a/b.go", true},
 		{"src/**", "src/**", true},
 		{"src/**", "src/a/**", true},
 		{"src/**", "docs/x", false},
 		{"src", "src", true},
-		{"src", "src/x", false},          // 字面模式只匹配自身
-		{"src/*", "src/a", true},         // child 字面量按段匹配
+		{"src", "src/x", false},  // 字面模式只匹配自身
+		{"src/*", "src/a", true}, // child 字面量按段匹配
 		{"src/*", "src/a/b", false},
-		{"src/*/x", "src/**", false},     // child 带通配符且不可证明 → 拒绝
-		{"src/a/**", "src/**", false},    // 子模式比父宽
+		{"src/*/x", "src/**", false},  // child 带通配符且不可证明 → 拒绝
+		{"src/a/**", "src/**", false}, // 子模式比父宽
 		{"", "src", false},
 		{"src", "", false},
-		{"../etc", "x", false},           // 非法模式
+		{"../etc", "x", false}, // 非法模式
 		{"/abs", "x", false},
 	}
 	for _, tc := range cases {

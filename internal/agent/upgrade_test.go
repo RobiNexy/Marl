@@ -96,7 +96,7 @@ func setupUpgrade(t *testing.T) (*Agent, *fakeLLM, *store.SQLiteStore, *ladder.C
 }
 
 // testLadderCfg2 / testCatalog2 是 ladder 包私有测试基建的 agent 侧镜像
-//（两档同模型阶梯 + 静态目录；跨包不可复用私有件，镜像的漂移由两侧各自的
+// （两档同模型阶梯 + 静态目录；跨包不可复用私有件，镜像的漂移由两侧各自的
 // golden 断言守住）。
 func testLadderCfg2() *ladder.Config {
 	return &ladder.Config{
@@ -123,8 +123,8 @@ func testCatalog2(t *testing.T, cfg *ladder.Config) *ladder.StaticCatalog {
 	if err := cat.AddModel(wire.ModelEntry{
 		ID: "deepseek-flash", Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: "deepseek-flash",
 		Caps: wire.ModelCaps{
-			Has:             []types.Capability{types.CapToolCall, types.CapJSONMode, types.CapThinking},
-			MaxContext:      65536, MaxOutput: 8192,
+			Has:        []types.Capability{types.CapToolCall, types.CapJSONMode, types.CapThinking},
+			MaxContext: 65536, MaxOutput: 8192,
 			CacheMode:       wire.CacheImplicitPrefix,
 			ThinkingControl: wire.ThinkControlLevel,
 			ThinkingLevels:  []string{"none", "low", "high", "max"},
@@ -261,5 +261,3 @@ func TestUpgradeTransientErrorsNotEvidence(t *testing.T) {
 
 // workspaceRootOf 从 agent 的 env 里取工作区根（测试辅助）。
 func workspaceRootOf(a *Agent) string { return a.env.ProjectRoot }
-
-

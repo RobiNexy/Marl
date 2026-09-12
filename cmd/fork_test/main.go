@@ -28,9 +28,9 @@ import (
 	"marl/internal/ladder"
 	"marl/internal/ns"
 	"marl/internal/proto"
+	"marl/internal/skill"
 	"marl/internal/spawner"
 	"marl/internal/store"
-	"marl/internal/skill"
 	"marl/internal/types"
 	"marl/internal/wire"
 )
@@ -132,8 +132,8 @@ func run(o options) error {
 	if err := cat.AddModel(wire.ModelEntry{
 		ID: "deepseek-flash", Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: "deepseek-flash",
 		Caps: wire.ModelCaps{
-			Has:             []types.Capability{types.CapToolCall, types.CapJSONMode, types.CapThinking},
-			MaxContext:      65536, MaxOutput: 8192,
+			Has:        []types.Capability{types.CapToolCall, types.CapJSONMode, types.CapThinking},
+			MaxContext: 65536, MaxOutput: 8192,
 			CacheMode:       wire.CacheImplicitPrefix,
 			ThinkingControl: wire.ThinkControlLevel,
 			ThinkingLevels:  []string{"none", "low", "high", "max"},
@@ -247,8 +247,8 @@ func run(o options) error {
 		return err
 	}
 	task := "列出 src/ 下所有 .go 文件，fork 一个子 Agent；" +
-			"子任务：在 src/auth/ 下写 summary.txt，内容为三行以内的 src/main.go 摘要。" +
-			"等子完成后，用不超过三句话总结它做了什么。"
+		"子任务：在 src/auth/ 下写 summary.txt，内容为三行以内的 src/main.go 摘要。" +
+		"等子完成后，用不超过三句话总结它做了什么。"
 	if err := parent.AppendUser(ctx, task); err != nil {
 		return err
 	}
@@ -305,25 +305,26 @@ func (f *childFactory) BuildChild(ctx context.Context, plan *spawner.ChildPlan, 
 		llm = &childScript{}
 	}
 	child, err := agent.New(agent.Config{
-		ID:           plan.ID,
-		ParentID:     plan.ParentID,
-		Depth:        plan.Depth,
-		MaxDepth:     1,
-		SystemPrompt: "你是子 Agent：完成任务后调用 report_to_parent 汇报结果。",
-		MaxRounds:    6,
-		Log:          f.t,
-		Views:        f.t,
-		LLM:          llm,
-		Skills:       f.reg,
-		Namespace:    plan.Namespace,
-		Resolver:     f.resolver,
-		ProjectRoot:  f.root,
-		Sampling:     types.SamplingParams{MaxTokens: 1024, TimeoutMs: 120_000},
-		Thinking:     b.Thinking,
-		Spawner:      f.spw,
-		ReportSink:   f.spw,
+		ID:            plan.ID,
+		ParentID:      plan.ParentID,
+		Depth:         plan.Depth,
+		MaxDepth:      1,
+		Mailbox:       plan.Mailbox, // 多层拓扑的 report 路由面（阶段 9）
+		SystemPrompt:  "你是子 Agent：完成任务后调用 report_to_parent 汇报结果。",
+		MaxRounds:     6,
+		Log:           f.t,
+		Views:         f.t,
+		LLM:           llm,
+		Skills:        f.reg,
+		Namespace:     plan.Namespace,
+		Resolver:      f.resolver,
+		ProjectRoot:   f.root,
+		Sampling:      types.SamplingParams{MaxTokens: 1024, TimeoutMs: 120_000},
+		Thinking:      b.Thinking,
+		Spawner:       f.spw,
+		ReportSink:    f.spw,
 		ReportChecker: f.chk,
-		TaskID:       "fork-task",
+		TaskID:        "fork-task",
 	})
 	if err != nil {
 		return nil, err
@@ -353,8 +354,8 @@ func (p *parentScript) ExecuteTurn(_ context.Context, _ *wire.CanonicalRequest) 
 		return withUsageT(toolCallTurnT(mkT("list_dir", map[string]any{"path": "src", "depth": 2}))), nil
 	case 1:
 		return withUsageT(toolCallTurnT(mkT("spawn_subagent", map[string]any{
-			"profile_id":    "coder",
-			"task":          "在 src/auth/ 下写 summary.txt，内容为三行以内的 src/main.go 摘要，然后 report。",
+			"profile_id":     "coder",
+			"task":           "在 src/auth/ 下写 summary.txt，内容为三行以内的 src/main.go 摘要，然后 report。",
 			"writable_paths": []string{"src/auth/**"},
 		}))), nil
 	default:

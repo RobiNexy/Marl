@@ -124,6 +124,7 @@ type TimelineEntry struct {
 // Timeline 返回最近 n 条提交（`fossil timeline -n <n>`；读命令）。
 //
 // 解析 fossil timeline 的默认形态：
+//
 //	=== 2026-09-12 ===
 //	06:50:45 [e2442af0fb] *CURRENT* test commit (user: agent:root tags: trunk)
 //

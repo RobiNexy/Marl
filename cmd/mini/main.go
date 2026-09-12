@@ -56,7 +56,7 @@ const readmeTask = "列出当前目录，读 README.md"
 
 // filesTaskTemplate 是阶段 3 的凑满上下文任务（一次一个文件——把轮数撑起来，
 // 压缩区才有中段可言）。
-const filesTaskTemplate = "依次读取 files/ 目录下的 %d 个文件（f01.txt 到 f%02d.txt）。"+
+const filesTaskTemplate = "依次读取 files/ 目录下的 %d 个文件（f01.txt 到 f%02d.txt）。" +
 	"每次只调用一次 file_read、读完一个再读下一个；全部读完后给出不超过三句话的总结。"
 
 // failingTask 是阶段 4 的升级触发任务（dry-run 专用：真跑无法强制模型
@@ -193,12 +193,12 @@ func run(o options) error {
 	}
 
 	var (
-		binding    types.Binding
-		ladderCfg  *ladder.Config
-		router     wire.Router
-		cat        wire.Catalog
-		upgrader   *agent.UpgradeConfig
-		recorder   *ledger.Recorder
+		binding   types.Binding
+		ladderCfg *ladder.Config
+		router    wire.Router
+		cat       wire.Catalog
+		upgrader  *agent.UpgradeConfig
+		recorder  *ledger.Recorder
 	)
 	if o.ladderPath != "" {
 		ladderCfg, err = ladder.Load(o.ladderPath)
@@ -303,20 +303,20 @@ func run(o options) error {
 	}
 
 	a, err := agent.New(agent.Config{
-		ID:           "mini-agent",
-		Depth:        0,
-		SystemPrompt: systemPromptFor(o.task),
-		MaxRounds:    o.maxRounds,
-		Log:          st,
-		Views:        st,
-		LLM:          llm,
-		Skills:       reg,
-		Namespace:    workNS,
-		Resolver:     resolver,
-		ProjectRoot:  root,
-		Snapshots:    snapshots,
-		Sampling:     types.SamplingParams{MaxTokens: 1024, TimeoutMs: 120_000},
-		Thinking:     binding.Thinking,
+		ID:               "mini-agent",
+		Depth:            0,
+		SystemPrompt:     systemPromptFor(o.task),
+		MaxRounds:        o.maxRounds,
+		Log:              st,
+		Views:            st,
+		LLM:              llm,
+		Skills:           reg,
+		Namespace:        workNS,
+		Resolver:         resolver,
+		ProjectRoot:      root,
+		Snapshots:        snapshots,
+		Sampling:         types.SamplingParams{MaxTokens: 1024, TimeoutMs: 120_000},
+		Thinking:         binding.Thinking,
 		MaxContextTokens: o.ctxBudget,
 		Compression: func() *agent.CompressConfig {
 			if o.ctxBudget <= 0 {
@@ -333,9 +333,9 @@ func run(o options) error {
 				BudgetReserved: 1024,
 			}
 		}(),
-		TaskID:  "mini-task",
-		Ledger:  recorder,
-		Audit:   store.AuditSQLite{SQLiteStore: st},
+		TaskID:   "mini-task",
+		Ledger:   recorder,
+		Audit:    store.AuditSQLite{SQLiteStore: st},
 		Upgrader: upgrader,
 	})
 	if err != nil {

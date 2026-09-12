@@ -86,8 +86,12 @@ func (a *Agent) handleEnvelope(env proto.Envelope) {
 
 // recordChildReport 记录一份子 report（pump goroutine 调用；只碰内存）。
 //
-// 全部 pending 子归位时向 reportsDone 发信号（非阻塞：信号位被重复触发
-// 是无害的——awaitChildren 只等一次）。
+// 两个信号位（都非阻塞，重复触发无害）：
+//   - reportsDone：全部 pending 子归位（WaitAll 的解除判据）；
+//   - reportArrival：任一 report 到达（WaitAny/WaitN 的计数来源）。
+//
+// 判定依据的快照语义：信号只负责"醒来"，数量的裁决在 awaitChildren 收
+// 醒来后用 childReports 计数重新确认（缓冲 1 的丢失在计数口径下无关）。
 func (a *Agent) recordChildReport(report *proto.ChildReport) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -98,6 +102,10 @@ func (a *Agent) recordChildReport(report *proto.ChildReport) {
 	}
 	delete(a.pendingChildren, report.ChildID)
 	a.childrenStatus[report.ChildID] = status
+	select {
+	case a.reportArrival <- struct{}{}:
+	default:
+	}
 	if len(a.pendingChildren) == 0 {
 		select {
 		case a.reportsDone <- struct{}{}:
@@ -124,15 +132,11 @@ func (a *Agent) hasPendingChildren() bool {
 // 期间不烧钱：不发起任何 LLM 调用（Part 8.3 的"父不推进轮次"）。
 // ctx 取消 → 恢复 Running 并返回取消错误（调用方决定是否重启）。
 func (a *Agent) awaitChildren(ctx context.Context) error {
+	kind, n := a.takeWait()
 	a.state = types.StateBlocked
 	a.blockReason = types.BlockWaitChildren
 	a.auditState(ctx, "blocked", string(types.BlockWaitChildren))
-	var err error
-	select {
-	case <-ctx.Done():
-		err = ctx.Err()
-	case <-a.reportsDone:
-	}
+	err := a.waitReports(ctx, kind, n)
 	a.state = types.StateRunning
 	a.blockReason = ""
 	a.auditState(ctx, "running", "")
@@ -140,6 +144,50 @@ func (a *Agent) awaitChildren(ctx context.Context) error {
 		return err
 	}
 	return a.flushChildReports(ctx)
+}
+
+// waitReports 是恢复判据的骨架（策略语义文件见 wait.go）：
+//
+//	all —— 等 reportsDone（全部 pending 归位时 pump 发的信号）；
+//	any —— 任一份 report 即恢复；
+//	n   —— 到 n 份 report 或 pending 清空（"n 大于剩余子数"自然落为全收）。
+//
+// 计数口径 = childReports（缓冲未落库的 report 数）——数量判据读的是
+// 已经确定到达的份数，不受信号丢失影响。
+func (a *Agent) waitReports(ctx context.Context, kind WaitStrategy, n int) error {
+	switch kind {
+	case WaitAny:
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-a.reportArrival:
+			return nil
+		}
+	case WaitN:
+		if n < 1 {
+			n = 1 // 非法阈值回落为"任一"（schema 已限 1..len，双保险）
+		}
+		for {
+			a.mu.Lock()
+			arrived := len(a.childReports)
+			a.mu.Unlock()
+			if arrived >= n {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-a.reportArrival:
+			}
+		}
+	default:
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-a.reportsDone:
+			return nil
+		}
+	}
 }
 
 // auditState 记一条状态迁移审计（marl status 从审计重建进程状态表的唯一

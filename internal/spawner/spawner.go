@@ -5,6 +5,7 @@ package spawner
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -24,6 +25,14 @@ type ChildPlan struct {
 	// Injected 是 InjectMessages 指向的条目（按 Seq 升序；Prov=Injected 的
 	// 落库由工厂执行）。
 	Injected []*types.LogEntry
+	// Task 是 req.TaskDescription 的引用（孙脚本需要知道自己的任务参数
+	// ——例如要写的文件名由父写进任务描述时的多层测试场景）。
+	Task string
+	// Mailbox 是子的信箱读端（阶段 9：多层拓扑里孙子的 report 要路由到
+	// 这个信箱——工厂必须把它装配进子 Agent 的 Config，否则父级链在
+	// "孙 report"这一步断掉且静默：报告投递超时只是子 end 端的一个
+	// "REPORT_UNDELIVERED"，现象是父永远等不到孙的 report）。
+	Mailbox <-chan proto.Envelope
 }
 
 // ChildRunner 是一个已构建、可运行的子 Agent（工厂的产出）。
@@ -99,14 +108,22 @@ type Process struct {
 	reported bool
 	// Writable 是子命名空间的 write 挂载（框架代报的机械检查范围）。
 	Writable []string
+
+	// ---- 阶段 9：Watchdog 的进程表扩展 ----
+	// StartedAt 是子 goroutine 的启动时刻（超时判据）。
+	StartedAt time.Time
+	// cancel 是子 Run 的取消点（Terminate 的机制面）。只在 Adjudicate /
+	// runChild 的包装里赋值一次；nil = 尚未启动。
+	cancel          context.CancelFunc // chassis 注入
+	terminateReason string             // 已被 Watchdog 终止的原因（代报文本的一部分）
 }
 
 // Spawner 是框架级单例（Part 9.1）。
 //
 // 并发：进程表的全部访问经 mu；Adjudicate 与子生命周期回调可并发。
 type Spawner struct {
-	mu     sync.Mutex
-	procs  map[types.AgentID]*Process
+	mu    sync.Mutex
+	procs map[types.AgentID]*Process
 	// nsOf 记录每个进程的命名空间（Subset 校验需要完整父命名空间；
 	// Process 本体不存——它保持 Part 8.1 的"扁平进程表"形态）。
 	nsOf   map[types.AgentID]*types.Namespace
@@ -170,13 +187,9 @@ func (s *Spawner) Adjudicate(ctx context.Context, req *proto.SpawnRequest) (*pro
 	if requester == nil {
 		return reject(proto.SpawnErrRequesterNotFound, "请求者 %s 不在进程表（框架 bug 或已终止）", req.RequesterID), nil
 	}
-	if !s.cfg.CanSpawnAtDepth(requester.Depth) {
-		return reject(proto.SpawnErrNotPermitted, "你的角色不允许 fork 子 Agent；请用 file_write / file_edit 直接完成任务"), nil
-	}
-	childDepth := requester.Depth + 1
-	if childDepth > s.cfg.MaxDepth {
-		return reject(proto.SpawnErrMaxDepth,
-			"已达最大深度 %d，不能再 fork。请直接执行任务", s.cfg.MaxDepth), nil
+	childDepth, dReject := depthGate(s.cfg.CanSpawnAtDepth, requester.Depth, s.cfg.MaxDepth)
+	if dReject != nil {
+		return dReject, nil
 	}
 	if len(s.procs) >= s.cfg.MaxActive {
 		return reject(proto.SpawnErrGlobalAgentLimit, "全局活跃 Agent 已达上限 %d", s.cfg.MaxActive), nil
@@ -209,15 +222,17 @@ func (s *Spawner) Adjudicate(ctx context.Context, req *proto.SpawnRequest) (*pro
 	// ---- 批准：登记 + 建子 + 启动 ----
 	s.nextID++
 	childID := types.AgentID(fmt.Sprintf("sub_%06d", s.nextID))
+	mb := make(chan proto.Envelope, 32)
 	child := &Process{
 		ID:        childID,
 		Depth:     childDepth,
 		State:     types.StateRunning,
-		Mailbox:   make(chan proto.Envelope, 32),
+		Mailbox:   mb,
 		ParentID:  requester.ID,
 		Children:  map[types.AgentID]types.ChildStatus{},
 		Writable:  writablePatterns(childNS),
 		reported:  false,
+		StartedAt: time.Now(),
 	}
 	s.procs[childID] = child
 	s.nsOf[childID] = childNS
@@ -230,7 +245,8 @@ func (s *Spawner) Adjudicate(ctx context.Context, req *proto.SpawnRequest) (*pro
 
 	plan := &ChildPlan{
 		ID: childID, Depth: childDepth, ParentID: requester.ID,
-		Namespace: childNS, Injected: injected,
+		Namespace: childNS, Injected: injected, Mailbox: mb,
+		Task: req.TaskDescription,
 	}
 	runner, err := s.cfg.Factory.BuildChild(ctx, plan, req)
 	if err != nil {
@@ -241,13 +257,18 @@ func (s *Spawner) Adjudicate(ctx context.Context, req *proto.SpawnRequest) (*pro
 		requester.ForkRounds--
 		return nil, fmt.Errorf("spawner: build child %s: %w", childID, err)
 	}
-	go s.runChild(ctx, child, runner)
+	// runCtx 独立于请求 ctx 的派生点：Watchdog 的 Terminate 经 cancel 打断
+	// 子的 Run（Run 的退出路径覆盖 ctx 取消——返回错误 → 框架代报 failed）。
+	runCtx, cancel := context.WithCancel(ctx)
+	child.cancel = cancel // Adjudicate 持锁期间直接赋值（进程表只由持锁方写）
+	go s.runChild(runCtx, child, runner)
 	return &proto.SpawnDecision{Status: proto.SpawnApproved, ChildAgentID: childID}, nil
 }
 
 // runChild 是子生命周期的包装（Spawner 拥有此 goroutine；退出条件：
-// 子 Run 返回或 ctx 取消）。退出未 report 的子由框架代报 failed——
-// 这是阶段 5 的活性兜底（Watchdog 的完整形态在阶段 9）。
+// 子 Run 返回或 runCtx 被 Terminate 取消）。退出未 report 的子由框架
+// 代报 failed——活性兜底；Watchdog 终止的子走同一兜底，原因文本里带
+// watchdog 的裁决（Part 8.5：父的视角始终只有"子回来了/被终止了"）。
 func (s *Spawner) runChild(ctx context.Context, child *Process, runner ChildRunner) {
 	err := runner.Run(ctx)
 	s.mu.Lock()
@@ -262,12 +283,68 @@ func (s *Spawner) runChild(ctx context.Context, child *Process, runner ChildRunn
 	if err != nil {
 		reason = fmt.Sprintf("child exited with error: %v", err)
 	}
+	if child.terminateReason != "" {
+		reason = fmt.Sprintf("watchdog 终止：%s（底层退出状态：%v）", child.terminateReason, err)
+	}
 	s.deliverReportLocked(&proto.ChildReport{
 		ChildID:   child.ID,
 		Status:    proto.ReportFailed,
 		Report:    "框架代报：" + reason,
-		StartedAt: time.Now(),
+		StartedAt: child.StartedAt,
 	})
+}
+
+// Terminate 强制终止一个子 Agent（Watchdog 的 mechanic 面）。
+//
+// 语义：取消执行 ctx → 子的 Run 返回（或超时后被 LLM 层的 timeout 打断）
+// → runChild 的框架代报路径向父投递 failed。已 report 的子是终止不了
+// 的（任务已终结）→ 错误；未启动（cancel 未挂）→ 错误（诊断面）。
+func (s *Spawner) Terminate(id types.AgentID, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	child := s.procs[id]
+	if child == nil {
+		return fmt.Errorf("spawner: %s not in process table", id)
+	}
+	if child.reported {
+		return fmt.Errorf("spawner: child %s already reported (terminate is only for live children)", id)
+	}
+	if child.cancel == nil {
+		return fmt.Errorf("spawner: child %s not started (no cancel point)", id)
+	}
+	if child.terminateReason == "" {
+		child.terminateReason = reason // 只记第一次裁决（重复 cancel 无害但归因要唯一）
+	}
+	child.cancel()
+	return nil
+}
+
+// ProcessInfo 是进程表的一行快照（Watchdog / marl status 的口径）。
+type ProcessInfo struct {
+	ID        types.AgentID
+	ParentID  types.AgentID
+	Depth     int
+	State     types.AgentState
+	StartedAt time.Time
+	Termini   string // 已终止原因（未终止 = ""）
+}
+
+// Snapshot 返回全部进程的快照（升序按 ID）。
+//
+// Watchdog 与状态 UI 从这里读进程表——持有 Spawner 内部结构的只读
+// 快照（进程表扁平：父子关系在信息里显式呈现，但表本身仍是扁平 map）。
+func (s *Spawner) Snapshot() []ProcessInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]ProcessInfo, 0, len(s.procs))
+	for _, p := range s.procs {
+		out = append(out, ProcessInfo{
+			ID: p.ID, ParentID: p.ParentID, Depth: p.Depth,
+			State: p.State, StartedAt: p.StartedAt, Termini: p.terminateReason,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 // ReportToParent 实现 agent.ReportSink（子 Agent 投递 report 的通道）。

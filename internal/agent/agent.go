@@ -205,6 +205,11 @@ type Agent struct {
 	childrenStatus  map[types.AgentID]types.ChildStatus
 	childReports    []*proto.ChildReport
 	reportsDone     chan struct{}
+	// 阶段 9：等待策略（wait.go；单次生效后回退 all）与"任一 report 到达"
+	// 的信号（any/n 的解除判据）。reportArrival 由 pump 非阻塞通知。
+	waitStrategy  WaitStrategy
+	waitN         int
+	reportArrival chan struct{}
 	// 本 Agent 的任务终态信号（子：report 已投递）。
 	reported bool
 	// 成功写入的文件（机械检查的数据源；file_write 成功时记录）。
@@ -307,13 +312,14 @@ func New(cfg Config) (*Agent, error) {
 		pendingChildren:  map[types.AgentID]bool{},
 		childrenStatus:   map[types.AgentID]types.ChildStatus{},
 		reportsDone:      make(chan struct{}, 1),
+		reportArrival:    make(chan struct{}, 1),
 		writtenFiles:     map[string]bool{},
 		nextPosition:     1.0,
-		log:          cfg.Log,
-		views:        cfg.Views,
-		llm:          cfg.LLM,
-		skills:       cfg.Skills,
-		authorizer:   skill.NewAuthorizer(cfg.Skills, cfg.AllowedSkills),
+		log:              cfg.Log,
+		views:            cfg.Views,
+		llm:              cfg.LLM,
+		skills:           cfg.Skills,
+		authorizer:       skill.NewAuthorizer(cfg.Skills, cfg.AllowedSkills),
 		env: &skill.SkillEnv{
 			AgentID:     cfg.ID,
 			Namespace:   cfg.Namespace,

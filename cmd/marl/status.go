@@ -23,10 +23,15 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+
 	"fmt"
 	"io"
 	"os"
 	"sort"
+	"strings"
+	"time"
+
+	"github.com/mattn/go-isatty"
 
 	"marl/internal/store"
 	"marl/internal/types"
@@ -53,6 +58,7 @@ type discussionInfo struct {
 func cmdStatus(args []string) error {
 	fs := flag.NewFlagSet("marl status", flag.ContinueOnError)
 	dbPath := fs.String("db", ".marl/store.db", "存储数据库路径")
+	color := fs.String("color", "auto", "色块：auto（终端时开）/ always / never")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -66,12 +72,37 @@ func cmdStatus(args []string) error {
 	if err != nil {
 		return fmt.Errorf("query audit: %w", err)
 	}
-	renderStatus(os.Stdout, evs)
+	colorize := isTerminal()
+	switch *color {
+	case "always":
+		colorize = true
+	case "never":
+		colorize = false
+	}
+	renderStatusColored(os.Stdout, evs, colorize)
 	return nil
+}
+
+// isTerminal 的判定点（isatty.IsTerminal 的引入面唯一——渲染测试直接
+// 传 color 参数，不依赖真实终端）。
+func isTerminal() bool {
+	return isatty.IsTerminal(os.Stdout.Fd())
 }
 
 // renderStatus 渲染状态快照（与 I/O 解耦——golden 测试直接驱动本函数）。
 func renderStatus(w io.Writer, evs []*store.AuditEvent) {
+	renderStatusColored(w, evs, false)
+}
+
+// renderStatusColored 是带色块的渲染（color=false 时不输出 ANSI——输入
+// 重定向/管道里的字节垃圾没有可读性平衡）。
+//
+// 色块口径（Part 8.6 的 ⚠️/✅ 同向映射：状态恒等式在色里承载）：
+//
+//	green（青）—— Running / Idle（正常态）
+//	yellow（黄）—— Blocked（含 Blocked(Discussing) 的等人场景）
+//	red（红）—— Crashed（ 框架代报/Watchdog 终止的路径）
+func renderStatusColored(w io.Writer, evs []*store.AuditEvent, color bool) {
 	if len(evs) == 0 {
 		fmt.Fprintln(w, "（无任何审计事件：库里还没有 agent 运行过）")
 		return
@@ -99,6 +130,7 @@ func renderStatus(w io.Writer, evs []*store.AuditEvent) {
 			// 是请求者、Target 是孩子——agent_state 没有这个二义）。
 			get(ev.AgentID).State = st
 			get(ev.AgentID).Reason = reasonOfPayload(ev.Payload)
+			get(ev.AgentID).Since = ev.Timestamp
 		case auditActionDiscussionOpen:
 			get(ev.AgentID).State = string(types.StateBlocked)
 			get(ev.AgentID).Reason = string(types.BlockDiscussing)
@@ -149,7 +181,7 @@ func renderStatus(w io.Writer, evs []*store.AuditEvent) {
 	// 同父之子按 fork 顺序。
 	for _, id := range order {
 		if agents[id].parent == "" {
-			printTree(w, agents[id], agents, order, 0)
+			printTree(w, agents[id], agents, order, 0, color)
 		}
 	}
 
@@ -179,26 +211,52 @@ func renderStatus(w io.Writer, evs []*store.AuditEvent) {
 }
 
 // agentStatus 是重建出的一行。
+// agentStatus 是重建出的一行。
 type agentStatus struct {
 	ID     types.AgentID
 	parent types.AgentID
 	depth  int
 	State  string
 	Reason string
+	// Since 是最后一次状态事件的时刻（Running 的"运行多久"与 Blocked
+	// 的"卡了多久"共用；零值 = 无时间口径——旧审计没有 Timestamp 时退化）。
+	Since time.Time
 }
 
-// stateLine 渲染状态与阻塞原因（Blocked(Discussing) 形态）。
+// stateLine 渲染状态 + 阻塞原因 + 时长（Part 8.6 的
+// "Blocked(Discussing) 3h08m" 形态；时长 = 最后一次状态事件到"现在"。
+// [偏离文档: 时长的基准是审计快照的重建时刻（statuses 允许滞后一个
+// 事件——三进制： lasted "现在"进程内存态不落库）。]
 func (a *agentStatus) stateLine() string {
 	if a.State == "" {
 		return "（无状态审计——尚未运行或为旧版本写入）"
 	}
+	out := a.State
 	if a.Reason != "" {
-		return fmt.Sprintf("%s(%s)", a.State, a.Reason)
+		out += "(" + a.Reason + ")"
 	}
-	return a.State
+	if !a.Since.IsZero() {
+		out += " " + humanDuration(sinceOf(a))
+	}
+	return out
 }
 
-func printTree(w io.Writer, a *agentStatus, agents map[types.AgentID]*agentStatus, order []types.AgentID, depth int) {
+// sinceOf 延迟包装（unit-testable 的开销隔离——now 的注入点）。
+func sinceOf(a *agentStatus) time.Duration { return time.Since(a.Since) }
+
+// humanDuration 渲染"如何告诉人"的时长（大单位优先）。
+func humanDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	if d >= time.Hour {
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+	if d >= time.Minute {
+		return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%ds", int(d.Seconds()))
+}
+
+func printTree(w io.Writer, a *agentStatus, agents map[types.AgentID]*agentStatus, order []types.AgentID, depth int, color bool) {
 	indent := ""
 	for i := 0; i < depth; i++ {
 		indent += "   └─ "
@@ -207,12 +265,42 @@ func printTree(w io.Writer, a *agentStatus, agents map[types.AgentID]*agentStatu
 	if depth > 0 {
 		prefix = "🔧"
 	}
-	fmt.Fprintf(w, "%s%s %s (depth=%d) %s\n", indent, prefix, a.ID, a.depth, a.stateLine())
+	fmt.Fprintf(w, "%s%s %s (depth=%d) %s\n", indent, prefix, a.ID, a.depth, colorizeState(color, a.stateLine()))
 	for _, id := range order {
 		if agents[id].parent == a.ID {
-			printTree(w, agents[id], agents, order, depth+1)
+			printTree(w, agents[id], agents, order, depth+1, color)
 		}
 	}
+}
+
+// ANSI 色码（色块的机制面；Go 的 map 遍历顺序与此无关——渲染输出是
+// stdout 的字节流）。Terminal 判定在 cmdStatus 层（renderStatus 保持
+// 无色的默认——管道/文件里 ANSI 字节没有可读性收益）。
+const (
+	ansiGreen  = "\x1b[32m"
+	ansiYellow = "\x1b[33m"
+	ansiRed    = "\x1b[31m"
+	ansiReset  = "\x1b[0m"
+)
+
+// colorizeState 按状态选色（色块口径见 renderStatusColored 的注释；
+// 无法归类的状态不加色——比猜错一个色更诚实）。
+func colorizeState(color bool, stateLine string) string {
+	if !color {
+		return stateLine
+	}
+	var code string
+	switch {
+	case strings.Contains(stateLine, "blocked"):
+		code = ansiYellow
+	case strings.Contains(stateLine, "crashed"):
+		code = ansiRed
+	case strings.Contains(stateLine, "running"), strings.Contains(stateLine, "idle"):
+		code = ansiGreen
+	default:
+		return stateLine
+	}
+	return code + stateLine + ansiReset
 }
 
 // payloadMap 把审计 payload 解成 map（还原失败 = 空表——任何解析失败

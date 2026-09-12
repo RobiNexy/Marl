@@ -22,11 +22,11 @@ import (
 //   - thinking-only（不 ready）→ 继续下一轮（轮数上限兜底，防止空转烧预算）。
 //
 // 阶段 4/5 的插入点（每轮边界上，顺序即语义）：
-//   1. maybeCompress  —— headroom 不足先压缩（阶段 3）；
-//   2. compile/execute/handle —— 本轮业务；
-//   3. 记账 + 证据采集 + maybeUpgrade —— 每轮结束的固定动作（阶段 4）；
-//   4. 子 report 已提交（child）→ 结束；有子未归（parent）→ errWaitChildren
-//      （阶段 5，Run 外层等待后继续）。
+//  1. maybeCompress  —— headroom 不足先压缩（阶段 3）；
+//  2. compile/execute/handle —— 本轮业务；
+//  3. 记账 + 证据采集 + maybeUpgrade —— 每轮结束的固定动作（阶段 4）；
+//  4. 子 report 已提交（child）→ 结束；有子未归（parent）→ errWaitChildren
+//     （阶段 5，Run 外层等待后继续）。
 //
 // 失败：
 //   - 轮数耗尽 → 错误（保险丝，不是业务结论）；

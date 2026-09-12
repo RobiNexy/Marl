@@ -86,7 +86,7 @@ func setupCommit(t *testing.T, nChildren int) (*Agent, *spawner.Spawner, *forkFa
 		Sampling:     types.SamplingParams{MaxTokens: 512},
 		Mailbox:      mb,
 		Spawner:      spw,
-		Committer: &CommitConfig{VCS: cli, RepoPath: repo},
+		Committer:    &CommitConfig{VCS: cli, RepoPath: repo},
 	})
 	if err != nil {
 		t.Fatalf("parent: %v", err)
@@ -233,5 +233,3 @@ func TestM6_5ConcurrentReports(t *testing.T) {
 		t.Fatalf("sub_task_result = %d, want %d", subCount, n)
 	}
 }
-
-

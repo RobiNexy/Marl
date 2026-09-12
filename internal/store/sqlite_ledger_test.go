@@ -25,9 +25,9 @@ func newLedgerStore(t *testing.T) *SQLiteStore {
 
 func ledgerEntry(rung string, call CostCategory, usage [6]int, cost float64) *LedgerEntry {
 	return &LedgerEntry{
-		TaskID:  "t1",
-		AgentID: "a1",
-		Rung:    types.RungID(rung),
+		TaskID:   "t1",
+		AgentID:  "a1",
+		Rung:     types.RungID(rung),
 		CallType: call,
 		TokenUsage: types.TokenUsage{
 			PromptTokens: usage[0], CompletionTokens: usage[1], ReasoningTokens: usage[2],

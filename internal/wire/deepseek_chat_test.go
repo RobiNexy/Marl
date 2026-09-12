@@ -525,7 +525,7 @@ func TestDeepSeekChatAdapterModelName(t *testing.T) {
 			APIKey:       testAPIKey,
 			RemoteNames: map[string]string{
 				"deepseek-v4-pro": "deepseek-v4-pro",
-				"deepseek-flash":   testRemote,
+				"deepseek-flash":  testRemote,
 			},
 		}
 		many, err := NewDeepSeekChatAdapter(cfg)

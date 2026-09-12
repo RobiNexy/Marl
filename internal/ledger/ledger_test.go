@@ -70,7 +70,7 @@ func newTestRecorder(t *testing.T) (*Recorder, *store.SQLiteStore, *fakeCatalog)
 	}
 	t.Cleanup(func() { s.Close() })
 	cat := &fakeCatalog{pricing: map[string]wire.Pricing{
-		"deepseek-flash":   testPricing(),
+		"deepseek-flash":  testPricing(),
 		"deepseek-v4-pro": {InPerMTok: 4.0, CachedInPerMTok: 1.0, OutPerMTok: 8.0, ReasoningPerMTok: 8.0, Currency: "CNY"},
 	}}
 	rec, err := New(s, cat)

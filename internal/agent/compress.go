@@ -36,11 +36,11 @@ type CompressConfig struct {
 // 字段口径：OldTokens/NewTokens 是本地估算（View 预算口径，含 system 与
 // 工具表），与 headroom 判断同源；Reclaim 来自 Compressor 的真实测量。
 type CompressEvent struct {
-	Round      int
-	OldTokens  int
-	NewTokens  int
-	Reclaim    float64
-	L0Pruned   int
+	Round       int
+	OldTokens   int
+	NewTokens   int
+	Reclaim     float64
+	L0Pruned    int
 	SUMAppended bool // false = L0 独自达标，未生成 SUM
 }
 

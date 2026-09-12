@@ -24,7 +24,7 @@ import (
 
 // changeClaimRe 匹配"声称改了文件"的句子（中英动词 + 路径样 token）。
 var changeClaimRe = regexp.MustCompile(
-	`(写入|修改|创建|删除|更新|wrote|modified|created|updated|deleted)`) // verb
+									`(写入|修改|创建|删除|更新|wrote|modified|created|updated|deleted)`) // verb
 var pathLikeRe = regexp.MustCompile(`[\w\-./]+\.[a-zA-Z0-9]{1,6}\b`) // path-like token
 
 // TODORe 匹配未完成标记（Part 9.6 的第一行检查）。

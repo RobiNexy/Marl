@@ -136,8 +136,8 @@ project:
 `,
 		// 知识目录的占位文件不用 .keep：fossil add 默认跳过 dotfiles
 		// （实测记录见测试报告阶段 6），README.md 语义也更清晰。
-		".marl/knowledge/contracts/README.md":  "# 契约\n接口契约放这里（Part 1.2 knowledge/contracts）。",
-		".marl/knowledge/decisions/README.md":  "# 架构决策\n决策记录放这里。",
+		".marl/knowledge/contracts/README.md":   "# 契约\n接口契约放这里（Part 1.2 knowledge/contracts）。",
+		".marl/knowledge/decisions/README.md":   "# 架构决策\n决策记录放这里。",
 		".marl/knowledge/preferences/README.md": "# 常驻块\n偏好与约束放这里（编译成 standing_orders，上限 1000 est-token）。",
 	}
 	for rel, content := range files {

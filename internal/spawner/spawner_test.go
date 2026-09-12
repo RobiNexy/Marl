@@ -25,8 +25,8 @@ import (
 
 // fakeRunner 记录 Run 是否被调用，可阻塞模拟子运行。
 type fakeRunner struct {
-	mu       sync.Mutex
-	block    chan struct{} // 非 nil 时 Run 阻塞直到关闭
+	mu        sync.Mutex
+	block     chan struct{} // 非 nil 时 Run 阻塞直到关闭
 	runCalled bool
 }
 
