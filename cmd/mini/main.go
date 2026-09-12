@@ -1,4 +1,4 @@
-// 命令 mini 是设计文档 13.4/13.5（阶段 2/3）的交付检查命令。
+// 命令 mini 是设计文档 13.4/13.5/13.6（阶段 2/3/4）的交付检查命令。
 //
 // 阶段 2：构造一个能"接收任务、调 LLM、解析 tool_call、调技能、再调 LLM"
 // 的最小闭环，跑完打印 Log。交付判据：
@@ -13,14 +13,22 @@
 //   - SUM 七章节齐全（机械校验通过才会被采纳）；
 //   - 压缩后任务继续跑完（Log 真相完整保留）。
 //
-// 模型与接入点硬编码（阶段 2/3 没有配置层，与 13.3 probe 的做法一致）；
-// DEEPSEEK_API_KEY 提供密钥（-dry-run 不需要，走脚本化回放）。
+// 阶段 4（-ladder）：配置阶梯（r0/r1/r2），从 r0 起跑；-task failing 是
+// "tool_call 总是返回格式错误"的任务（dry-run 专用），两次失败后自动升级
+// 到 r1。交付判据：
+//
+//   - 观察到升级日志（audit model_upgrade）；
+//   - go run ./cmd/ladder_report 显示 r0/r1 两级的 token 与成本。
+//
+// 模型与接入点硬编码（配置层在阶段 7；DEEPSEEK_API_KEY 提供密钥，
+// -dry-run 不需要，走脚本化回放）。
 //
 // 用法：
 //
-//	DEEPSEEK_API_KEY=sk-... go run ./cmd/mini -task files   # 真跑（压缩闭环）
-//	go run ./cmd/mini -task files -dry-run                 # 脚本化回放
-//	go run ./cmd/mini                                      # 阶段 2 的 readme 任务
+//	DEEPSEEK_API_KEY=sk-... go run ./cmd/mini -task files -ladder ladder.yaml
+//	go run ./cmd/mini -task files -dry-run
+//	go run ./cmd/mini -task failing -dry-run   # 升级场景（确定性脚本）
+//	go run ./cmd/mini                          # 阶段 2 的 readme 任务
 package main
 
 import (
@@ -34,6 +42,8 @@ import (
 
 	"marl/internal/agent"
 	"marl/internal/compress"
+	"marl/internal/ladder"
+	"marl/internal/ledger"
 	"marl/internal/ns"
 	"marl/internal/orchestrate"
 	"marl/internal/skill"
@@ -49,7 +59,11 @@ const readmeTask = "列出当前目录，读 README.md"
 const filesTaskTemplate = "依次读取 files/ 目录下的 %d 个文件（f01.txt 到 f%02d.txt）。"+
 	"每次只调用一次 file_read、读完一个再读下一个；全部读完后给出不超过三句话的总结。"
 
-// options 是命令行选项（阶段 2/3 的"配置层"就是它，与 probe 同一取舍）。
+// failingTask 是阶段 4 的升级触发任务（dry-run 专用：真跑无法强制模型
+// 产出非法 JSON——升级路径的确定性验证由脚本回放承担）。
+const failingTask = "读取 files/f01.txt（本任务的 tool_call 参数格式固定损坏，用于验证阶梯升级）。"
+
+// options 是命令行选项（阶段 2-4 的"配置层"就是它，与 probe 同一取舍）。
 type options struct {
 	apiKeyEnv   string
 	baseURL     string
@@ -65,6 +79,7 @@ type options struct {
 	ctxBudget   int
 	keepTail    int
 	minReclaim  float64
+	ladderPath  string
 }
 
 func parseOptions(args []string) options {
@@ -79,7 +94,7 @@ func parseOptions(args []string) options {
 	fs.StringVar(&o.dbPath, "db", ".marl-mini/supervisor.db", "SQLite 数据库路径")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "脚本化回放：不联网，验证闭环骨架")
 	fs.IntVar(&o.maxRounds, "max-rounds", 8, "主循环轮数上限")
-	fs.StringVar(&o.task, "task", "readme", "任务类型：readme（阶段 2）| files（阶段 3 压缩闭环）")
+	fs.StringVar(&o.task, "task", "readme", "任务类型：readme（阶段 2）| files（阶段 3 压缩）| failing（阶段 4 升级，dry-run 专用）")
 	fs.IntVar(&o.files, "files", 10, "files 任务的文件数")
 	// ctx-budget 是演示口径的有效窗口（est token）：真实窗口来自能力表
 	// （caps.MaxContext，64k），10 个小文件远凑不满；演示用小窗口让压缩
@@ -87,6 +102,7 @@ func parseOptions(args []string) options {
 	fs.IntVar(&o.ctxBudget, "ctx-budget", 0, "有效上下文窗口 est-token（0=禁用压缩；files 任务默认 4500）")
 	fs.IntVar(&o.keepTail, "keep-tail", 2, "压缩保留的尾部轮数（设计默认 3，演示取 2 让中段更早出现）")
 	fs.Float64Var(&o.minReclaim, "min-reclaim", 0.2, "压缩收益下限（交付判据：≥20%）")
+	fs.StringVar(&o.ladderPath, "ladder", "", "ladder.yaml 路径（空 = 单绑定，阶段 2/3 行为）")
 	_ = fs.Parse(args)
 	return o
 }
@@ -99,32 +115,37 @@ func main() {
 	}
 }
 
-// run 是一次完整交付检查：装配存储→技能→线路→Agent（→压缩器），跑完打印。
+// run 是一次完整交付检查：装配存储→技能→线路（→阶梯→账本）→Agent，跑完打印。
 func run(o options) error {
 	ctx, stop := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer stop()
 
-	// --- 工作区（files 任务用临时目录生成素材，不污染调用方 cwd）---
+	// --- 工作区（files/failing 任务用临时目录生成素材，不污染调用方 cwd）---
 	root, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("workspace root: %w", err)
 	}
 	taskText := readmeTask
-	if o.task == "files" {
+	if o.task == "files" || o.task == "failing" {
 		root, err = makeFilesWorkspace(o.files)
 		if err != nil {
 			return fmt.Errorf("files workspace: %w", err)
 		}
-		taskText = fmt.Sprintf(filesTaskTemplate, o.files, o.files)
-		if o.maxRounds < o.files+4 {
-			o.maxRounds = o.files + 4 // 每文件一轮 + 总结 + 余量
-		}
-		if o.ctxBudget == 0 {
-			o.ctxBudget = 4500 // 演示口径（见 flag 注释）
+		if o.task == "files" {
+			taskText = fmt.Sprintf(filesTaskTemplate, o.files, o.files)
+			if o.maxRounds < o.files+4 {
+				o.maxRounds = o.files + 4
+			}
+			if o.ctxBudget == 0 {
+				o.ctxBudget = 4500 // 演示口径（见 flag 注释）
+			}
+		} else {
+			taskText = failingTask
+			o.maxRounds = 8
 		}
 	}
 
-	// --- 存储层（真相之源 + 投影 + 快照通道）---
+	// --- 存储层（真相之源 + 投影 + 快照 + 账本 + 审计）---
 	dbDir := filepath.Dir(o.dbPath)
 	if dbDir != "." {
 		if err := os.MkdirAll(dbDir, 0o755); err != nil {
@@ -142,8 +163,6 @@ func run(o options) error {
 	}
 
 	// --- 技能层（注册 + 命名空间沙箱）---
-	// 挂载：整个工作区可写；.git 与 .marl* 隐藏——更长的模式在同等
-	// 具体度规则下胜出（ns.bestMount 的既有口径）。
 	workNS := &types.Namespace{AgentID: "mini-agent", Mounts: []types.Mount{
 		{Pattern: "**", Mode: types.PathWrite},
 		{Pattern: ".git/**", Mode: types.PathHidden},
@@ -161,7 +180,7 @@ func run(o options) error {
 		}
 	}
 
-	// --- 线路层（阶段 1 的 Deepseek 适配器直连；Pool 的排队/熔断在阶段 4+）---
+	// --- 线路层与阶梯（阶段 4：-ladder 配置两阶段调度；无阶梯 = 单绑定）---
 	key := os.Getenv(o.apiKeyEnv)
 	if o.dryRun && key == "" {
 		key = "dry-run-placeholder"
@@ -169,23 +188,78 @@ func run(o options) error {
 	if !o.dryRun && key == "" {
 		return fmt.Errorf("env %s is empty (real run needs a key; use -dry-run for offline replay)", o.apiKeyEnv)
 	}
-	// --- Agent（Binding 手工装配，逐字段按 types.Binding 不变量填）---
-	binding := types.Binding{
-		RungID:      "r0",
-		RungIndex:   0,
-		Endpoint:    o.endpoint,
-		Model:       o.modelID,
-		CacheBucket: "mini-agent", // 恒等于 AgentID（Patch 1）
-		Wire:        types.WireOpenAIChat,
-		Thinking:    types.ThinkingSpec{Level: "off"},
-		BoundAt:     time.Now(),
-		CachePrefix: wire.ModelCachePrefix(o.modelID, o.endpoint),
+	if o.task == "failing" && !o.dryRun {
+		return fmt.Errorf("task=failing 是 dry-run 专用（真跑无法强制模型产出非法 JSON）")
+	}
+
+	var (
+		binding    types.Binding
+		ladderCfg  *ladder.Config
+		router     wire.Router
+		cat        wire.Catalog
+		upgrader   *agent.UpgradeConfig
+		recorder   *ledger.Recorder
+	)
+	if o.ladderPath != "" {
+		ladderCfg, err = ladder.Load(o.ladderPath)
+		if err != nil {
+			return fmt.Errorf("ladder: %w", err)
+		}
+		cat = buildCatalog(o, ladderCfg)
+		router, err = ladder.NewRouter(cat.(*ladder.StaticCatalog), ladderCfg, ladder.RouterPolicy{PreferBonus: 1.0, CostWeight: 0.1})
+		if err != nil {
+			return fmt.Errorf("router: %w", err)
+		}
+		binding, err = router.Bind(types.Requirement{Require: []types.Capability{types.CapToolCall}},
+			"mini-agent", ladderCfg.Ladder, 0)
+		if err != nil {
+			return fmt.Errorf("bind: %w", err)
+		}
+		recorder, err = ledger.New(st, cat)
+		if err != nil {
+			return fmt.Errorf("ledger: %w", err)
+		}
+		upgrader = &agent.UpgradeConfig{
+			Router:      router,
+			Ladder:      ladderCfg,
+			Catalog:     cat,
+			Requirement: types.Requirement{Require: []types.Capability{types.CapToolCall}},
+			Policy: ladder.EvidencePolicy{
+				Threshold: 0.8, FailureWeight: 0.4, FormatErrorWeight: 0.4,
+				NoProgressWeight: 0.15, ChildFailureRateWeight: 1.0, ReclaimLowWeight: 0.1,
+			},
+		}
+	} else {
+		binding = types.Binding{
+			RungID:      "r0",
+			RungIndex:   0,
+			Endpoint:    o.endpoint,
+			Model:       o.modelID,
+			CacheBucket: "mini-agent", // 恒等于 AgentID（Patch 1）
+			Wire:        types.WireOpenAIChat,
+			Thinking:    types.ThinkingSpec{Level: "off"},
+			BoundAt:     time.Now(),
+			CachePrefix: wire.ModelCachePrefix(o.modelID, o.endpoint),
+		}
+	}
+
+	// --- Deepseek 适配器（远端名映射：阶梯模式从目录取，单绑定用 flag）---
+	remoteNames := map[string]string{o.modelID: o.remote}
+	if sc, ok := cat.(*ladder.StaticCatalog); ok {
+		remoteNames = map[string]string{}
+		for _, r := range ladderCfg.Ladder.Rungs {
+			entry, err := sc.Model(r.Model)
+			if err != nil {
+				return fmt.Errorf("catalog model %s: %w", r.Model, err)
+			}
+			remoteNames[r.Model] = entry.RemoteName
+		}
 	}
 	adapter, err := wire.NewDeepSeekChatAdapter(wire.DeepSeekChatConfig{
 		EndpointName: o.endpoint,
 		BaseURL:      o.baseURL,
 		APIKey:       key,
-		RemoteNames:  map[string]string{o.modelID: o.remote},
+		RemoteNames:  remoteNames,
 		BucketField:  o.bucketField,
 	})
 	if err != nil {
@@ -204,21 +278,21 @@ func run(o options) error {
 		bucketField: o.bucketField,
 	}
 	var llm agent.LLMExecutor = dl
-	var orchLLM compress.Executor = dl // 编排调用走同一条直连通路（结构化类型直通）
+	var orchLLM compress.Executor = dl
 	if o.dryRun {
 		canned := &cannedLine{task: o.task, files: o.files, root: root}
 		llm = canned
-		orchLLM = canned // 同一替身按请求形态分流（见 cannedLine.ExecuteTurn）
+		orchLLM = canned
 	}
 
-	// --- 压缩器（阶段 3：独立预算 + 独立账本出口）---
+	// --- 压缩器（阶段 3：独立预算 + 独立账本出口；阶段 4 的 Ledger 接管）---
 	engine, err := compress.NewEngine(compress.EngineConfig{
 		AgentID:        "mini-agent",
 		TaskID:         "mini-task",
 		LLM:            orchLLM,
 		Sampling:       types.SamplingParams{MaxTokens: 1024, TimeoutMs: 120_000, Temperature: 0.3},
 		MaxTotalTokens: 200000,
-		Sink:           &stdoutSink{}, // 阶段 4 的 SQLite Ledger 接管（ADR-0026）
+		Sink:           orchSinkFor(recorder, binding),
 	})
 	if err != nil {
 		return fmt.Errorf("compress engine: %w", err)
@@ -243,7 +317,6 @@ func run(o options) error {
 		Snapshots:    snapshots,
 		Sampling:     types.SamplingParams{MaxTokens: 1024, TimeoutMs: 120_000},
 		Thinking:     binding.Thinking,
-		// 压缩装配：ctxBudget <= 0 即禁用（readme 任务保持阶段 2 行为）。
 		MaxContextTokens: o.ctxBudget,
 		Compression: func() *agent.CompressConfig {
 			if o.ctxBudget <= 0 {
@@ -260,6 +333,10 @@ func run(o options) error {
 				BudgetReserved: 1024,
 			}
 		}(),
+		TaskID:  "mini-task",
+		Ledger:  recorder,
+		Audit:   store.AuditSQLite{SQLiteStore: st},
+		Upgrader: upgrader,
 	})
 	if err != nil {
 		return fmt.Errorf("agent: %w", err)
@@ -271,13 +348,80 @@ func run(o options) error {
 		return fmt.Errorf("append task: %w", err)
 	}
 
-	// --- 跑起来（主循环 + 压缩）---
+	// --- 跑起来（主循环 + 压缩 + 升级）---
 	if err := a.Run(ctx); err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
 
 	printCompressions(a)
 	return printLog(ctx, a.ID(), st, o.dbPath)
+}
+
+// buildCatalog 构造静态目录（阶段 4：代码注册，models.yaml 在阶段 7）。
+//
+// 计价是占位口径（DeepSeek 官方价随时间变化；报表的绝对金额在价格确认前
+// 只做相对比较——见 StaticCatalog 的注释）。阶梯里出现的模型必须注册，
+// 否则 Router fail fast。
+func buildCatalog(o options, cfg *ladder.Config) *ladder.StaticCatalog {
+	cat := ladder.NewStaticCatalog(cfg.Ladder)
+	seen := map[string]bool{}
+	for _, r := range cfg.Ladder.Rungs {
+		if seen[r.Model] {
+			continue
+		}
+		seen[r.Model] = true
+		remote := r.Model
+		if r.Model == o.modelID {
+			remote = o.remote
+		}
+		// [待验证] 计价为占位值；权威价格在 models.yaml（阶段 7）落地。
+		pricing := wire.Pricing{InPerMTok: 1.0, CachedInPerMTok: 0.25, OutPerMTok: 2.0, ReasoningPerMTok: 2.0, Currency: "CNY"}
+		if r.Model != o.modelID {
+			pricing = wire.Pricing{InPerMTok: 4.0, CachedInPerMTok: 1.0, OutPerMTok: 8.0, ReasoningPerMTok: 8.0, Currency: "CNY"}
+		}
+		_ = remote
+		if err := cat.AddModel(wire.ModelEntry{
+			ID: r.Model, Provider: "deepseek", Wire: types.WireOpenAIChat, RemoteName: remote,
+			Caps: wire.ModelCaps{
+				Has:             []types.Capability{types.CapToolCall, types.CapJSONMode, types.CapThinking},
+				MaxContext:      65536,
+				MaxOutput:       8192,
+				CacheMode:       wire.CacheImplicitPrefix,
+				ThinkingControl: wire.ThinkControlLevel,
+				ThinkingLevels:  []string{"none", "low", "high", "max"},
+			},
+			Pricing: pricing,
+		}); err != nil {
+			panic(fmt.Sprintf("mini: register model %s: %v", r.Model, err))
+		}
+	}
+	if err := cat.AddEndpoint(wire.EndpointConfig{
+		Name: o.endpoint, BaseURL: o.baseURL, KeyRef: "env:" + o.apiKeyEnv,
+		MaxInflight: 4, RPM: 60,
+	}); err != nil {
+		panic(fmt.Sprintf("mini: register endpoint: %v", err))
+	}
+	return cat
+}
+
+// orchSinkFor 把 Ledger 适配成压缩引擎的编排账本出口（阶段 4 的接管点；
+// 无阶梯模式返回控制台出口——没有计价来源）。
+func orchSinkFor(rec *ledger.Recorder, binding types.Binding) compress.UsageSink {
+	if rec == nil {
+		return &stdoutSink{}
+	}
+	return &ledgerSink{rec: rec, binding: binding}
+}
+
+// ledgerSink 是 compress.UsageSink → ledger.Recorder 的适配（Binding 由
+// 装配期固定：编排调用固定在起始档位 r0——Part 7.5"编排调用用 r0"）。
+type ledgerSink struct {
+	rec     *ledger.Recorder
+	binding types.Binding
+}
+
+func (s *ledgerSink) RecordOrchestration(ctx context.Context, agentID types.AgentID, taskID types.TaskID, usage *types.TokenUsage) error {
+	return s.rec.RecordOrchestration(ctx, taskID, agentID, s.binding, usage)
 }
 
 // makeFilesWorkspace 在临时目录生成 files/f01..fNN.txt（每个 150 行，
@@ -303,8 +447,7 @@ func makeFilesWorkspace(n int) (string, error) {
 	return root, nil
 }
 
-// stdoutSink 是编排账本的控制台出口（阶段 3 的"独立账本"可见形态；
-// 阶段 4 换成 store.Ledger 的 SQLite 落地）。
+// stdoutSink 是编排账本的控制台出口（无阶梯模式的可见形态）。
 type stdoutSink struct{}
 
 func (stdoutSink) RecordOrchestration(_ context.Context, agentID types.AgentID, taskID types.TaskID, u *types.TokenUsage) error {
@@ -342,12 +485,17 @@ func systemPromptFor(task string) string {
 任务：按用户要求逐个读取 files/ 目录下的文件。每次回复只调用一次 file_read，
 读完一个文件再读下一个；全部读完后给出简短总结。文件路径一律用工作区相对路径。`
 	}
+	if task == "failing" {
+		return `你是 Marl 的最小 Agent（阶段 4 升级验证）。
+任务：读取用户指定的文件。`
+	}
 	return `你是 Marl 的最小 Agent（阶段 2）。
 任务流程：先用 list_dir 了解目录结构，再用 file_read 读必要文件，需要落盘时用 file_write。
 回答用中文、简短；文件路径一律用工作区相对路径。`
 }
 
-// capsFor 是阶段 2/3 的能力表替身（与 probe 的 staticCaps 同源同取舍，注释在 wire_line.go）。
+// capsFor 是阶段 2-4 的能力表替身（与 probe 的 staticCaps 同源同取舍，
+// 注释在 wire_line.go；阶梯模式的目录在 buildCatalog）。
 func capsFor(o options) *miniCaps {
 	return &miniCaps{endpoint: o.endpoint, modelID: o.modelID}
 }
@@ -381,7 +529,8 @@ func printLog(ctx context.Context, id types.AgentID, st *store.SQLiteStore, dbPa
 		fmt.Printf("[%02d] %-7s %-14s %s\n", e.Seq, e.Role, prov, truncateLine(line, 160))
 	}
 	// 交付检查的 SQL 验证提示：
-	fmt.Printf("\n（可执行 sqlite3 %s \"SELECT seq, role, prov, substr(content,1,80) FROM log_entries;\" 验证落库）\n", dbPath)
+	fmt.Printf("\n（可执行 sqlite3 %s \"SELECT seq, role, prov, substr(content,1,80) FROM log_entries;\" 验证落库；"+
+		"go run ./cmd/ladder_report -db %s -task mini-task 查看成本报表）\n", dbPath, dbPath)
 	return nil
 }
 

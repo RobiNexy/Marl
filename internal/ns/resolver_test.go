@@ -146,3 +146,25 @@ func TestResolverCanWrite(t *testing.T) {
 		t.Fatal("uncovered: canWrite must be false")
 	}
 }
+
+// TestGlobMatchCrossCheck 是 types.PatternCovers/patternMatches 与本包
+// globMatch 的交叉一致性抽查（两处实现漂移的防线，见 types 契约注释）：
+// 对字面量路径，"模式匹配路径"的判定必须两侧一致。
+func TestGlobMatchCrossCheck(t *testing.T) {
+	nsx := &types.Namespace{AgentID: "x", Mounts: []types.Mount{
+		{Pattern: "src/**", Mode: types.PathRead},
+		{Pattern: "src/auth/**", Mode: types.PathWrite},
+		{Pattern: "src/*/one", Mode: types.PathRead},
+	}}
+	literals := []string{"src", "src/a", "src/a/b.go", "src/auth/k.go", "src/x/one", "src/x/one/two"}
+	for _, p := range literals {
+		clean := p
+		for _, m := range nsx.Mounts {
+			got := globMatch(m.Pattern, clean)
+			want := types.PatternCovers(m.Pattern, clean) // 字面量路径：child 无通配符
+			if got != want {
+				t.Fatalf("divergence on (%q, %q): ns.globMatch=%v types.PatternCovers=%v", m.Pattern, clean, got, want)
+			}
+		}
+	}
+}

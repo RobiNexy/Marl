@@ -2,6 +2,7 @@ package wire
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"marl/internal/types"
@@ -156,7 +157,16 @@ type CircuitPolicy struct {
 }
 
 // Validate 报告熔断策略是否可用：ErrorThreshold > 0、Cooldown > 0。
+//
+// 零值即开路（见类型注释），因此零值策略必须被拒绝——这不是形式主义，
+// 是"熔断一开始就是开的"这道防线的唯一守卫。
 // 并发：纯函数。
 func (p CircuitPolicy) Validate() error {
-	panic("TODO(phase 0): placeholder")
+	switch {
+	case p.ErrorThreshold <= 0:
+		return fmt.Errorf("circuit policy: error threshold %d must be > 0 (zero means the circuit opens immediately)", p.ErrorThreshold)
+	case p.Cooldown <= 0:
+		return fmt.Errorf("circuit policy: cooldown %v must be > 0", p.Cooldown)
+	}
+	return nil
 }

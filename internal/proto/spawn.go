@@ -87,6 +87,10 @@ const (
 	SpawnErrProfileNotFound   SpawnErrorCode = "PROFILE_NOT_FOUND"
 	SpawnErrNamespaceExceeded SpawnErrorCode = "NAMESPACE_EXCEEDED"
 	SpawnErrForkRounds        SpawnErrorCode = "FORK_ROUNDS_EXCEEDED"
+	// SpawnErrInvalidInject：InjectMessages 的 Seq 越界（SpawnRequest 契约：
+	// 越界必须被裁决拒绝而不是跳过——跳过会让子上下文缺掉被显式要求注入的
+	// 部分，而它自己不知道）。[新增: 阶段 5 落地时补充，见 ADR-0028。]
+	SpawnErrInvalidInject SpawnErrorCode = "INVALID_INJECT_SEQ"
 )
 
 // Valid 报告 c 是否为已定义错误码之一。
@@ -105,7 +109,7 @@ func (c SpawnErrorCode) Valid() bool {
 	switch c {
 	case SpawnErrRequesterNotFound, SpawnErrNotPermitted, SpawnErrMaxDepth,
 		SpawnErrGlobalAgentLimit, SpawnErrProfileNotFound, SpawnErrNamespaceExceeded,
-		SpawnErrForkRounds:
+		SpawnErrForkRounds, SpawnErrInvalidInject:
 		return true
 	}
 	return false

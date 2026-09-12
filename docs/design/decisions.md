@@ -762,3 +762,79 @@ DeepSeek 的思维控制分布在请求体的**两个不同层级**上，这就�
 **回退代价**：撤掉配对不变量，L0 去重在"模型重复读同一文件"的场景下必然产出
 被厂商拒绝的请求；撤掉轮口径裁决，长工具循环任务的压缩区被单条 user 消息吞掉，
 压缩永不触发。
+
+---
+
+## ADR-0027：阶段 4（阶梯与成本账本）的五项落地裁决
+
+**状态**：Accepted（对应设计文档 13.6 / Part 7；2026-09-12 阶段 4 交付时记录）
+
+**决策**：
+
+1. **thinking 档位表的载体**：`types.Rung` 保持纯排序/计价数据（不加字段——
+   契约字段变更需 ADR 且无收益），每档的 `ThinkingSpec` 由 `ladder.Config.Thinking`
+   平行承载，Router 是唯一组装点（ADR-0022 的"唯一真相在阶梯"落在这里）。
+   Load 强制每档显式声明 thinking.level——"不指定"会让厂商走默认档位
+   （实测默认 high），账单与配置意图不符且无告警。
+2. **成本公式**：`cost = (Prompt−CacheRead)×In + CacheRead×CachedIn +
+   (Completion−Reasoning)×Out + Reasoning×Reasoning`。`Completion − Reasoning`
+   的依据：DeepSeek 的 `completion_tokens` **包含**思维链（reasoning_tokens 是
+   completion_tokens_details 的子字段），Denormalizer 原样保留该口径；账单要
+   拆"可见输出/思维链"两个价格档必须先减再加。公式永远假设 Reasoning ⊆
+   Completion，厂商口径变化由 Denormalizer 拆分吸收（Part 10.11 纪律）。
+3. **用量未知的调用不记账**：TokenUsage 零值 = "用量确为零"，把未知记 0 会
+   让账单把失败调用伪装成免费（types.TokenUsage 的零值契约）。不记账是已知
+   低估，由"调用数与 token 数对不上"暴露——比静默记 0 诚实。
+4. **TaskSummary 的 Status 恒为 running**：账本只见账目、不见任务终态（没有
+   任务表）。报表的"状态"行在任务管理落地前由调用方覆盖；Duration 用账目
+   时间跨度（低估真实时长，报表注明口径）。
+5. **证据权重默认**：Part 7.3 示例"连续失败 2 次 → score=0.8" ⇒ 每次失败
+   0.4；格式错误同级；无进展每轮 0.15；子任务失败率 ×1.0（全军覆没单独
+   触发，>50% 需叠加）；压缩收益不足 +0.1。全部可配置（EvidencePolicy），
+   Threshold 必须 > 0（零值 = 任何证据立刻升级，ADR-0014 危险阈值类）。
+   ErrTransient/ErrContextOverflow/ErrContentFilter 不计入升级证据
+   （ErrorClass 语义表的直接推论）。
+
+**依据**：`internal/ladder`/`internal/ledger` 的测试矩阵、dry-run 升级场景
+（`mini -task failing -dry-run`，两次 BAD_ARGS → 升级 → r0/r1 分项报表）、
+真机跑（`mini -task files -ladder`：r0 9 次调用、编排 3 次单独记账、
+缓存命中 44%/85%）。
+
+---
+
+## ADR-0028：阶段 5（Spawner 与单层 fork）的五项落地裁决
+
+**状态**：Accepted（对应设计文档 13.7 / Part 8 / Part 9；2026-09-12 阶段 5 交付时记录）
+
+**决策**：
+
+1. **新增裁决错误码 `INVALID_INJECT_SEQ`**：SpawnRequest 契约要求"越界的
+   Seq 必须被裁决拒绝而不是跳过"，但阶段 0 的错误码清单没有承载它的码。
+   拒绝语义不能借用 NAMESPACE_EXCEEDED（那是权限问题，这是引用问题）。
+2. **Spawner 不 import agent**：子 Agent 的构建走 `ChildFactory` 接口
+   （装配层实现），Spawner 只认识 `ChildRunner`（能 Run 的东西）。依赖
+   方向恒定：cmd → {agent, spawner}，spawner ⊥ agent。子 Agent 的
+   ReportSink 由 Spawner 实现（`ReportToParent`），From 按代码路径填写
+   （原则 4）。`SetFactory` 只允许在首次 Adjudicate 前设置一次（工厂需要
+   引用 Spawner 本身，存在构造顺序依赖；运行中更换工厂不可归因）。
+3. **框架代报的触发点**：子 Run 返回而未 report → Spawner 代报 failed
+   （"child exited without report"）。这是阶段 5 的活性兜底（没有它，子
+   忘调 report_to_parent 会让父永久阻塞）；Watchdog 的完整形态（超预算/
+   超时/无进展）仍是阶段 9。
+4. **PatternCovers 的保守拒绝**：命名空间子集校验对"子模式带通配符且无法
+   静态证明被父模式覆盖"的形态（如 child `src/*/x` vs parent `src/a/**`）
+   一律拒绝——拒绝一次合法 spawn 的代价是一次重试，放行一次越权的代价是
+   权限模型失效。可证明形态：相等、`**`、`prefix/**` 前缀树、字面量子路径。
+5. **report 机械检查的否定语境**：'nothing modified' / '未修改' 这类否定句
+   不算"声称改了文件"——真机实测中纯阅读任务的成功 report 被动词表误降为
+   failed。修复方向是宁漏不误（漏报由 TODO 扫描与 FilesChanged 兜底）。
+
+**附带修复（跨阶段缺陷）**：`store.OpenSQLite` 的 DSN 增加
+`_txlock=immediate`——Append 的"读 MAX+1 → INSERT"在 deferred 事务里从读锁
+升级写锁时，WAL 快照过期会**立即**返回 SQLITE_BUSY（busy_timeout 不适用）。
+阶段 5 的父子并发追加真机实测踩中；IMMEDIATE 让取锁阶段排队，busy_timeout
+全程有效。附最小并发回归测试（`TestConcurrentAppend`）。
+
+**依据**：`internal/spawner`/`internal/agent` 的测试矩阵（含 10 轮 -race
+fork 稳定性）、真机跑（`fork_test`：父 fork 子 → 子只读 report success →
+父汇总；含一次机械检查误降级的发现与修复）。

@@ -3661,6 +3661,23 @@ L0 达标判据、哨兵、配对不变量、账本落点）见 ADR-0026。要�
 
 **目标**：配置三级阶梯（r0 / r1 / r2），任务能从 r0 起跑，失败证据累积后自动升级到 r1，Ledger 能分项记账。
 
+**阶段 4 已完成**（2026-09-12）：落地裁决见 ADR-0027，测试报告见
+`docs/test_report/phase4-5-test-report.md`。要点：
+
+- `internal/ladder`：ladder.yaml 加载（internal/config 的受限 YAML 子集解析器）、
+  两阶段调度 Router（谓词过滤 + 打分，startIndex 单调不回退 = 亲和性）、
+  证据累积器（权重可配置，ErrTransient 不计入证据）；
+- `internal/ledger`：成本公式（Completion−Reasoning 拆分可见输出与思维链）、
+  Recorder 三类入口、Part 7.6 报表渲染（含思维链占比与缓存命中列、机械建议）；
+- `internal/store`：SQLite ledger_entries / model_switch / audit_events 三表；
+- `internal/agent`：每轮证据采集 → 升级判据 → 重绑定（rung_index+1）→
+  审计 model_upgrade → Transient 告知 LLM → 清空证据；换 model_id 记
+  model_switch（缓存失效审计，数字来自逐轮真实累计）；
+- `cmd/mini -task failing -dry-run`：确定性升级场景（两次 BAD_ARGS → r1）；
+  `cmd/ladder_report` 输出分项成本；
+- "不做"清单执行：Pool 并发闸门 / 熔断与健康检测 / 能力探测均未做
+  （CircuitPolicy.Validate 顺手补齐）。
+
 具体任务：
 
 ```text
@@ -3714,6 +3731,24 @@ L0 达标判据、哨兵、配对不变量、账本落点）见 ADR-0026。要�
 **目标**：父 Agent 能 fork 一个子，子完成后 report，父收到 report 继续。
 
 **不涉及**：多个子并行、嵌套 fork（深度 >1）、讨论、escalate。
+
+**阶段 5 已完成**（2026-09-12）：落地裁决见 ADR-0028，测试报告见
+`docs/test_report/phase4-5-test-report.md`。要点：
+
+- `internal/spawner`：进程表（扁平）、Adjudicate 全闸（拓扑/权限/全局上限/
+  命名空间子集/扇出/注入越界）、buildNamespace（父 write 面对子降级 read）、
+  report 机械检查（TODO 扫描 + 否定语境感知的改动声明判据）、框架代报
+  （子退出未 report → failed）；
+- `internal/types`：Namespace.Subset + PatternCovers（保守拒绝不可证明的
+  通配符形态；与 ns.globMatch 交叉一致性测试）；
+- `internal/agent`：Mailbox 泵（pump goroutine，ctx/关闭双退出）、
+  Blocked(WaitChildren) 等待与恢复、sub_task_result 落 Log+View、
+  spawn/report 意图处理、6 个意图工具 schema 进冻结前缀（golden 守护）；
+- `cmd/fork_test`：父 fork 子 → 子 report → 父汇总，dry-run 与真跑均过
+  交付判据；
+- 真机发现的缺陷已修复并带回归测试：SQLITE_BUSY（deferred 事务升级锁，
+  _txlock=immediate 修复）、report 否定语境误判、fork 竞态（spawn 与
+  pending 检查之间到达的 report 被跳过 flush）。
 
 具体任务：
 
@@ -3986,8 +4021,8 @@ L0 达标判据、哨兵、配对不变量、账本落点）见 ADR-0026。要�
 | 1 | `go run cmd/probe` 缓存命中 | 第二次请求 cached_tokens > 0（✅ 已通过：768/963） |
 | 2 | `go run cmd/mini` 完成循环 | Log 里有完整 tool 链条 |
 | 3 | 触发压缩 | 新 View 比旧小 ≥20%（✅ 已通过：真跑 8 次压缩，收益 25.7%~30.6%） |
-| 4 | 升级到 r1 | Ledger 记录两级消耗 |
-| 5 | fork 单子 | 父收到 report，子文件存在 |
+| 4 | 升级到 r1 | Ledger 记录两级消耗（✅ 已通过：dry-run 升级场景 r0=2 调用 r1=1 调用，报表分项） |
+| 5 | fork 单子 | 父收到 report，子文件存在（✅ 已通过：dry-run + 真跑，sub_task_result 进父 Log） |
 | 6 | fossil commit | timeline 有 commit，author 正确 |
 | 7 | 常驻块注入 | CanonicalRequest 含 standing_orders |
 | 8 | 讨论闭环 | verdict @approve → 结论落地 |

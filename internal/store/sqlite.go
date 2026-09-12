@@ -57,6 +57,47 @@ CREATE TABLE IF NOT EXISTS views (
 	data      TEXT NOT NULL,
 	saved_at  INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS ledger_entries (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	task_id     TEXT NOT NULL,
+	agent_id    TEXT NOT NULL,
+	rung        TEXT NOT NULL,
+	call_type   TEXT NOT NULL,
+	prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+	completion_tokens INTEGER NOT NULL DEFAULT 0,
+	reasoning_tokens  INTEGER NOT NULL DEFAULT 0,
+	cache_write       INTEGER NOT NULL DEFAULT 0,
+	cache_read        INTEGER NOT NULL DEFAULT 0,
+	image_tokens      INTEGER NOT NULL DEFAULT 0,
+	cost        REAL NOT NULL,
+	currency    TEXT NOT NULL,
+	ts          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_task ON ledger_entries (task_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_rung ON ledger_entries (task_id, rung);
+
+CREATE TABLE IF NOT EXISTS model_switch (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	agent_id    TEXT NOT NULL,
+	task_id     TEXT NOT NULL DEFAULT '',
+	from_model  TEXT NOT NULL,
+	to_model    TEXT NOT NULL,
+	reason      TEXT NOT NULL DEFAULT '',
+	cache_hits_before   INTEGER NOT NULL DEFAULT 0,
+	cache_writes_before INTEGER NOT NULL DEFAULT 0,
+	at          INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+	id      INTEGER PRIMARY KEY AUTOINCREMENT,
+	agent_id TEXT NOT NULL,
+	action  TEXT NOT NULL,
+	target  TEXT NOT NULL DEFAULT '',
+	payload TEXT,
+	ts      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_events (agent_id, action);
 `
 
 // OpenSQLite 打开（或创建）supervisor.db。
@@ -67,7 +108,13 @@ CREATE TABLE IF NOT EXISTS views (
 func OpenSQLite(path string) (*SQLiteStore, error) {
 	// ?_pragma=busy_timeout：并发写时的等待上限；modernc 驱动以这个参数名
 	// 区分于 connection-string，切到 mattn 驱动时值与名会重审。
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	// ?_txlock=immediate：写事务以 BEGIN IMMEDIATE 开始——**必须**：
+	// 默认的 deferred 事务"先读后写"（Append 的读 MAX+1 → INSERT）在 WAL
+	// 下从读锁升级写锁时，若快照已过期会**立即**返回 SQLITE_BUSY（此时
+	// busy_timeout 不适用——它只护首次取锁）。阶段 5 的多 Agent 并发追加
+	// 真机实测踩中了这个坑（见测试报告阶段 5 §缺陷），IMMEDIATE 让取锁
+	// 阶段就排队，busy_timeout 全程有效。
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}

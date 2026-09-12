@@ -202,3 +202,77 @@ func TestMountValid(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 阶段 5：Namespace.Subset / PatternCovers（Part 9.3 权限单调递减）
+// ---------------------------------------------------------------------------
+
+func TestPatternCovers(t *testing.T) {
+	cases := []struct {
+		parent, child string
+		want          bool
+	}{
+		{"**", "anything/here", true},
+		{"src/**", "src", true},          // ** 匹配零段
+		{"src/**", "src/a/b.go", true},
+		{"src/**", "src/**", true},
+		{"src/**", "src/a/**", true},
+		{"src/**", "docs/x", false},
+		{"src", "src", true},
+		{"src", "src/x", false},          // 字面模式只匹配自身
+		{"src/*", "src/a", true},         // child 字面量按段匹配
+		{"src/*", "src/a/b", false},
+		{"src/*/x", "src/**", false},     // child 带通配符且不可证明 → 拒绝
+		{"src/a/**", "src/**", false},    // 子模式比父宽
+		{"", "src", false},
+		{"src", "", false},
+		{"../etc", "x", false},           // 非法模式
+		{"/abs", "x", false},
+	}
+	for _, tc := range cases {
+		if got := PatternCovers(tc.parent, tc.child); got != tc.want {
+			t.Errorf("PatternCovers(%q, %q) = %v, want %v", tc.parent, tc.child, got, tc.want)
+		}
+	}
+}
+
+func TestNamespaceSubset(t *testing.T) {
+	parent := &Namespace{AgentID: "p", Mounts: []Mount{
+		{Pattern: "src/**", Mode: PathRead},
+		{Pattern: "src/auth/**", Mode: PathWrite},
+	}}
+	// 合法子集：写是父写的子集，读是父读的子集。
+	child := &Namespace{AgentID: "c", Mounts: []Mount{
+		{Pattern: "src/**", Mode: PathRead},
+		{Pattern: "src/auth/oauth/**", Mode: PathWrite},
+	}}
+	if !child.Subset(parent) {
+		t.Fatal("valid subset rejected")
+	}
+	// 提权：子要写父只读的范围。
+	escalated := &Namespace{AgentID: "c", Mounts: []Mount{
+		{Pattern: "src/**", Mode: PathWrite},
+	}}
+	if escalated.Subset(parent) {
+		t.Fatal("write escalation must be rejected")
+	}
+	// 越界：子挂载父根本没覆盖。
+	outside := &Namespace{AgentID: "c", Mounts: []Mount{
+		{Pattern: "etc/**", Mode: PathRead},
+	}}
+	if outside.Subset(parent) {
+		t.Fatal("out-of-scope mount must be rejected")
+	}
+	// 非法模式 fail-closed。
+	bad := &Namespace{AgentID: "c", Mounts: []Mount{{Pattern: "src/**", Mode: ""}}}
+	if bad.Subset(parent) {
+		t.Fatal("invalid mode must fail closed")
+	}
+	// nil 防御。
+	if (*Namespace)(nil).Subset(parent) {
+		t.Fatal("nil child")
+	}
+	if !(&Namespace{AgentID: "c"}).Subset(parent) {
+		t.Fatal("empty child (nothing granted) is a valid subset")
+	}
+}

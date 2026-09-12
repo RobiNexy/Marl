@@ -81,7 +81,7 @@ func (a *Agent) compileView(ctx context.Context) (*wire.CanonicalRequest, error)
 			Content:   a.sysPrompt,
 			Stability: types.StabilityFrozen,
 		}},
-		Tools:    toolsFromRegistry(a.skills),
+		Tools:    append(toolsFromRegistry(a.skills), intentSchemas()...),
 		Sampling: a.sampling,
 		Thinking: a.thinking,
 	}
@@ -125,7 +125,23 @@ func (a *Agent) compileView(ctx context.Context) (*wire.CanonicalRequest, error)
 		}
 		req.Segments = append(req.Segments, *seg)
 	}
+	// Transient 段（Part 3.6）：尾部追加，Stability=volatile（不变量表：
+	// volatile 只允许在尾部）；不入 Log，本轮被模型消费后由 eventLoop 清除。
+	for _, t := range a.transients {
+		req.Segments = append(req.Segments, wire.Segment{
+			Kind:      wire.SegTransient,
+			Speaker:   wire.SpeakerFramework,
+			Content:   t,
+			Stability: types.StabilityVolatile,
+		})
+	}
 	return req, nil
+}
+
+// clearTransients 清空本轮 Transient（Part 3.6：下一轮 View 重建时自动丢弃——
+// "下一轮"在这里的语义是"本轮编译已把它送达模型之后"）。
+func (a *Agent) clearTransients() {
+	a.transients = a.transients[:0]
 }
 
 // toolsFromRegistry 把注册表 schema 转成协议无关的工具定义（冻结前缀的

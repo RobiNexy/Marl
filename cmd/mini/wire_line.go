@@ -119,25 +119,39 @@ func (c *cannedLine) ExecuteTurn(_ context.Context, req *wire.CanonicalRequest) 
 		return replyTurn(cannedSUM(rel)), nil
 	}
 	defer func() { c.round++ }()
-	if c.task != "files" {
-		// 阶段 2 的 readme 脚本。
+	// 阶段 3 的 files 脚本：每轮读一个文件，读完全部后总结。
+	if c.task == "files" {
+		if c.round < c.files {
+			n := c.round + 1
+			return withUsage(toolCallTurn(mkCallID("file_read", fmt.Sprintf("call-f%d", n), map[string]any{
+				"path": fmt.Sprintf("files/f%02d.txt", n), "mode": "content", "limit": 150,
+			}))), nil
+		}
+		return withUsage(replyTurn(fmt.Sprintf("已按顺序读完 %d 个文件：内容均为循环生成的占位行，无异常。任务完成。", c.files))), nil
+	}
+	// 阶段 4 的 failing 脚本：两轮参数损坏的 tool_call（BAD_ARGS → 格式
+	// 错误证据 ×2 → 阈值 0.8 触发升级到 r1），第三轮"换强模型后"成功。
+	if c.task == "failing" {
 		switch c.round {
-		case 0:
-			return toolCallTurn(mkCall("list_dir", map[string]any{"path": ".", "depth": 1})), nil
-		case 1:
-			return toolCallTurn(mkCall("file_read", map[string]any{"path": "README.md"})), nil
+		case 0, 1:
+			return withUsage(toolCallTurn(types.ToolCall{
+				ID:        fmt.Sprintf("call-bad-%d", c.round),
+				Name:      "file_read",
+				Arguments: json.RawMessage(`{not json`),
+			})), nil
 		default:
-			return replyTurn("已列出目录并读完 README.md：这是一个 Go 项目（module marl）。任务完成。"), nil
+			return withUsage(replyTurn("已切换到更强档位；文件读取成功：f01.txt 内容为占位文本。任务完成。")), nil
 		}
 	}
-	// 阶段 3 的 files 脚本：每轮读一个文件，读完全部后总结。
-	if c.round < c.files {
-		n := c.round + 1
-		return toolCallTurn(mkCall("file_read", map[string]any{
-			"path": fmt.Sprintf("files/f%02d.txt", n), "mode": "content", "limit": 150,
-		})), nil
+	// 阶段 2 的 readme 脚本。
+	switch c.round {
+	case 0:
+		return withUsage(toolCallTurn(mkCall("list_dir", map[string]any{"path": ".", "depth": 1}))), nil
+	case 1:
+		return withUsage(toolCallTurn(mkCall("file_read", map[string]any{"path": "README.md"}))), nil
+	default:
+		return withUsage(replyTurn("已列出目录并读完 README.md：这是一个 Go 项目（module marl）。任务完成。")), nil
 	}
-	return replyTurn(fmt.Sprintf("已按顺序读完 %d 个文件：内容均为循环生成的占位行，无异常。任务完成。", c.files)), nil
 }
 
 // cannedSUM 构造一份能通过机械校验的 SUM（七章节 + 工作区真实路径）。
@@ -171,6 +185,13 @@ func mkCall(name string, args map[string]any) types.ToolCall {
 	return types.ToolCall{ID: "call-" + name, Name: name, Arguments: json.RawMessage(b)}
 }
 
+// mkCallID 与 mkCall 同形，但显式指定调用 id（同任务多次调用同一工具时
+// id 必须不同——与真实厂商行为一致）。
+func mkCallID(name, id string, args map[string]any) types.ToolCall {
+	b, _ := json.Marshal(args)
+	return types.ToolCall{ID: id, Name: name, Arguments: json.RawMessage(b)}
+}
+
 func toolCallTurn(calls ...types.ToolCall) *wire.WireTurn {
 	return &wire.WireTurn{Outcomes: []wire.Outcome{{ToolCalls: calls}}}
 }
@@ -186,4 +207,15 @@ func replyTurn(text string) *wire.WireTurn {
 			Meta:     map[string]any{"finish_reason": "stop"},
 		},
 	}}}
+}
+
+// withUsage 给 turn 的全部 Outcome 填同一份用量（Part 10.11：同一 turn
+// 共享一个 *TokenUsage；账本按 turn 记一次）。dry-run 的用量是演示数字
+// （真实用量来自厂商 usage）。
+func withUsage(turn *wire.WireTurn) *wire.WireTurn {
+	u := &types.TokenUsage{PromptTokens: 5000, CompletionTokens: 300}
+	for i := range turn.Outcomes {
+		turn.Outcomes[i].Usage = u
+	}
+	return turn
 }

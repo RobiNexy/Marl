@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"marl/internal/proto"
 	"marl/internal/skill"
 	"marl/internal/types"
 	"marl/internal/wire"
@@ -20,11 +21,18 @@ import (
 //   - 工具调用 → 顺序执行、结果进 Log+View，继续下一轮；
 //   - thinking-only（不 ready）→ 继续下一轮（轮数上限兜底，防止空转烧预算）。
 //
+// 阶段 4/5 的插入点（每轮边界上，顺序即语义）：
+//   1. maybeCompress  —— headroom 不足先压缩（阶段 3）；
+//   2. compile/execute/handle —— 本轮业务；
+//   3. 记账 + 证据采集 + maybeUpgrade —— 每轮结束的固定动作（阶段 4）；
+//   4. 子 report 已提交（child）→ 结束；有子未归（parent）→ errWaitChildren
+//      （阶段 5，Run 外层等待后继续）。
+//
 // 失败：
 //   - 轮数耗尽 → 错误（保险丝，不是业务结论）；
 //   - LLM.ExecuteTurn 的 error（网络/装配）→ 原样上抛（ctx 取消保持原样）；
-//   - 厂商错误（ErrorClass）→ 阶段 2 不做压缩/升级/重试，直接终结并把
-//     分类带回（恢复策略全是 13.5+ 的范围）。
+//   - 厂商错误（ErrorClass）→ 记证据后终结并带回分类（恢复策略按类别分流：
+//     transient 属 Pool、overflow 属压缩、其余属升级/上报）。
 func (a *Agent) eventLoop(ctx context.Context) error {
 	for round := 0; round < a.maxRounds; round++ {
 		// 压缩检查在编译之前：headroom 不足先压缩再编译，避免把一个
@@ -43,9 +51,25 @@ func (a *Agent) eventLoop(ctx context.Context) error {
 			}
 			return fmt.Errorf("agent: round %d: execute: %w", round, err)
 		}
+		a.beginRoundSignals()
 		toolCount, err := a.handleTurn(ctx, turn)
+		a.recordTurnLedger(ctx, turn)
+		a.feedRound()
 		if err != nil {
 			return fmt.Errorf("agent: round %d: handle turn: %w", round, err)
+		}
+		a.clearTransients() // 本轮 Transient 已被模型消费（Part 3.6：用完即扔）
+		// 升级检查在轮边界（Part 7.3：每轮结束后）。
+		if err := a.maybeUpgrade(ctx); err != nil {
+			return fmt.Errorf("agent: round %d: upgrade: %w", round, err)
+		}
+		// 子 Agent：report 已提交 → 任务完成（Run 收尾）。
+		if a.reported {
+			return nil
+		}
+		// 父 Agent：本轮 fork 了子且仍有子未归 → 阻塞等待（Run 外层处理）。
+		if a.hasPendingChildren() {
+			return errWaitChildren
 		}
 		if toolCount == 0 && turn.Ready() {
 			return nil
@@ -53,6 +77,46 @@ func (a *Agent) eventLoop(ctx context.Context) error {
 		// 未 ready / 有工具调用 → 下一轮（maxRounds 兜底）。
 	}
 	return fmt.Errorf("agent: turn budget exhausted after %d rounds", a.maxRounds)
+}
+
+// errWaitChildren 是 eventLoop 的内部哨兵：本轮 fork 了子 Agent，主循环
+// 需要进入 Blocked(WaitChildren) 等待全部子 report（Part 8.3）。
+// 由 Run 捕获（errors.Is），不外泄给调用方。
+var errWaitChildren = errors.New("agent: waiting for children reports")
+
+// beginRoundSignals / clearRoundSignals 是每轮证据信号的复位点。
+func (a *Agent) beginRoundSignals() {
+	a.roundFormatErrors = 0
+	a.roundProgress = false
+	a.roundErrorClass = wire.ErrNone
+}
+
+// recordTurnLedger 把本轮 LLM 调用记入账本（阶段 4）。
+//
+// usage 口径：同一 turn 的多个 Outcome 共享同一个 *TokenUsage（Part 10.11
+// 的记账纪律）——取首个非 nil，不跨 Outcome 累加。用量未知（厂商错误）不记
+// （ledger 契约：未知 ≠ 0）。binding 未设置（阶段 2 的最小装配）跳过。
+func (a *Agent) recordTurnLedger(ctx context.Context, turn *wire.WireTurn) {
+	if a.ledger == nil || !a.bindingSet {
+		return
+	}
+	var usage *types.TokenUsage
+	for i := range turn.Outcomes {
+		if turn.Outcomes[i].Usage != nil {
+			usage = turn.Outcomes[i].Usage
+			break
+		}
+	}
+	if usage == nil {
+		return
+	}
+	// 缓存统计累计（换模型审计的真实数据源）。
+	a.cacheHits += int64(usage.CacheReadTokens)
+	a.cacheMiss += int64(usage.PromptTokens - usage.CacheReadTokens)
+	if err := a.ledger.RecordMain(ctx, a.taskID, a.id, a.binding, usage); err != nil {
+		// 记账失败不回滚业务（账目缺失可见即可——打印到 stderr）。
+		fmt.Printf("marl: ledger record failed (agent=%s): %v\n", a.id, err)
+	}
 }
 
 // handleTurn 逐 Outcome 落 Log 与 View（Part 10.16 主循环伪代码的落地），
@@ -69,10 +133,11 @@ func (a *Agent) handleTurn(ctx context.Context, turn *wire.WireTurn) (int, error
 
 		// 失败产出：三项皆空、信息在 Signals.ErrorClass（ADR-0019 的例外形态）。
 		if o.Signals.ErrorClass.IsError() {
-			// [阶段 2 边界] 不做重试/压缩/升级：终结并带回类别。
+			// 错误分类进本轮证据信号（升级判据的输入；分类→证据的映射在 feedRound）。
+			a.roundErrorClass = o.Signals.ErrorClass
+			// [阶段边界] 不做重试/排队：终结并带回类别。
 			// 同 turn 先于失败段的成功产出不消失——它们已落 Log。
-			return total, fmt.Errorf("llm outcome error class=%s (vendor/protocol failure; recovery starts at phase 3)",
-				o.Signals.ErrorClass)
+			return total, fmt.Errorf("llm outcome error class=%s (vendor/protocol failure)", o.Signals.ErrorClass)
 		}
 		// 三个分支是顺序 if 而非 switch：混合流形态（10.16 表）允许一个
 		// Outcome 同时携带 reasoning 与 tool_call——switch 会把后面那类
@@ -111,6 +176,8 @@ func (a *Agent) handleTurn(ctx context.Context, turn *wire.WireTurn) (int, error
 				return total, fmt.Errorf("append reply: %w", err)
 			}
 			a.addToView(RoleForLogRole(e.Role), e.ID)
+			// 有可见回复是进展信号（升级证据的"无进展"反例）。
+			a.roundProgress = true
 		}
 		// 三段皆空且无 ErrorClass 的 Outcome 被 Denormalizer 挡掉（Outcome
 		// 不变量），这里不做第二套防御（Part 10.11 的纪律）。
@@ -135,7 +202,8 @@ func (a *Agent) appendAssistantToolCalls(ctx context.Context, calls []types.Tool
 
 // executeToolCall 一次调用的完整通路（Part 4.3 / 5.4 / 9.4）：
 //
-//	Authorize（白名单；错误码**如实回填**给模型——Part 9.4）
+//	意图工具（proto.IsIntentTool）→ executeIntent（改系统结构，走裁决关口）
+//	技能：Authorize（白名单；错误码**如实回填**给模型——Part 9.4）
 //	  → Registry.Get → 参数解析（json.Unmarshal）→ Skill.Execute
 //	  （业务失败 OK=false 是正常返回；基础设施故障 error != nil 上抛）
 //	  → 结果序列化 → Log（Role=tool_result）+ View。
@@ -143,6 +211,16 @@ func (a *Agent) appendAssistantToolCalls(ctx context.Context, calls []types.Tool
 // 并发：本方法在 eventLoop 的单 goroutine 里顺序调用（10.16 约束 2）；
 // ctx 取消传播到技能的 IO。
 func (a *Agent) executeToolCall(ctx context.Context, call types.ToolCall) error {
+	// 0. 意图工具：改系统结构的能力走各自的裁决关口（Part 4.1 的边界）。
+	//    意图不做白名单校验（它的权限模型是 Profile.CanSpawn / 深度，
+	//    由关口裁决），也不查技能注册表。
+	if proto.IsIntentTool(call.Name) {
+		res, err := a.executeIntent(ctx, call)
+		if err != nil {
+			return fmt.Errorf("intent %s infra failure: %w", call.Name, err)
+		}
+		return a.appendToolEntry(ctx, call, res)
+	}
 	// 1. 授权（先确认能不能打，再找工具——错误面统一是结构化错误码）。
 	if err := a.authorizer.Authorize(ctx, a.id, call.Name); err != nil {
 		return a.appendToolEntry(ctx, call, skill.ResultFromAuthorizeError(err))
@@ -156,8 +234,8 @@ func (a *Agent) executeToolCall(ctx context.Context, call types.ToolCall) error 
 	var args map[string]any
 	if len(call.Arguments) > 0 {
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
-			// MalformedOutput（10.11 表：计入升级证据）。阶段 2 作为业务失败
-			// 回填（模型下一轮换写法）；升级证据的累计在阶段 4。
+			// MalformedOutput（10.11 表：计入升级证据）。作为业务失败
+			// 回填（模型下一轮换写法）；证据计数在 appendToolEntry 里统一做。
 			return a.appendToolEntry(ctx, call, skill.NewFailure("BAD_ARGS", "arguments not valid JSON: %v", err))
 		}
 	}
@@ -180,6 +258,21 @@ func (a *Agent) appendToolEntry(ctx context.Context, call types.ToolCall, res *s
 		// 技能产出破坏了自己的契约（调用方 bug 级别）——不能静默过：
 		// 把"结果不可信"本身作为错误面回填是最诚实的表达。
 		return fmt.Errorf("tool %s: invalid result: %w", call.Name, err)
+	}
+	// 证据信号：格式错误与进展（升级判据的原始信号，Part 7.2）。
+	switch {
+	case res.ErrorType == "BAD_ARGS":
+		a.roundFormatErrors++
+	case res.OK:
+		a.roundProgress = true // 成功的技能/意图调用是进展
+	}
+	// 写文件追踪（report 机械检查"声称改了文件但无改动"的数据源）。
+	if call.Name == "file_write" && res.OK {
+		if p, ok := res.Data["path"].(string); ok && p != "" {
+			a.mu.Lock()
+			a.writtenFiles[p] = true
+			a.mu.Unlock()
+		}
 	}
 	content, err := json.Marshal(res)
 	if err != nil {

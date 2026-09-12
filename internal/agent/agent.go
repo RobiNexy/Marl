@@ -16,8 +16,13 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 
+	"marl/internal/ladder"
+	"marl/internal/ledger"
+	"marl/internal/proto"
 	"marl/internal/skill"
 	"marl/internal/store"
 	"marl/internal/types"
@@ -83,6 +88,33 @@ type Config struct {
 	MaxContextTokens int
 	// Compression 非 nil 即启用压缩（headroom 触发，Part 3.7）。
 	Compression *CompressConfig
+
+	// ---- 阶段 4：账本与升级 ----
+	// TaskID 是本 Agent 所属任务（Ledger 记账与审计的归属键）。
+	TaskID types.TaskID
+	// Ledger 非 nil 时每次主调用后记账（用量未知则跳过，见 ledger 契约）。
+	Ledger *ledger.Recorder
+	// Audit 非 nil 时记审计事件（model_upgrade / spawn / report_check 等）。
+	Audit store.AuditStore
+	// Upgrader 非 nil 即启用阶梯升级（Part 7.3：每轮结束后检查证据）。
+	Upgrader *UpgradeConfig
+
+	// ---- 阶段 5：拓扑与消息 ----
+	// ParentID 非空表示本 Agent 是子（report_to_parent 有去处）。
+	ParentID types.AgentID
+	// MaxDepth 是 fork 深度上限（SkillEnv 的元信息；硬闸在 Spawner）。
+	// 0 = 未设（SkillEnv.MaxDepth 回落为 Depth，阶段 2 行为）。
+	MaxDepth int
+	// Mailbox 是本 Agent 的信箱读端（Part 8.7；nil = 无消息面）。
+	Mailbox <-chan proto.Envelope
+	// Spawner 是 spawn_subagent 意图的裁决关口（proto.Spawner；nil 时该
+	// 意图调用返回失败——"没有关口等于没有权限"）。
+	Spawner proto.Spawner
+	// ReportSink 是 report_to_parent 的投递通道（nil = 根 Agent，无父可报）。
+	ReportSink ReportSink
+	// ReportChecker 是 report 的机械检查（原则 4；ReportSink 非 nil 时必须
+	// 提供——没有检查器的 report 等于无条件采信自述）。
+	ReportChecker proto.ReportChecker
 }
 
 // Agent 是一个单任务的执行体（Part 8.1，阶段 2 无 Mailbox/父子拓扑）。
@@ -109,8 +141,42 @@ type Agent struct {
 	// 压缩（阶段 3）：maxContextTokens <= 0 表示禁用；compress 为 nil 同。
 	maxContextTokens   int
 	compress           *CompressConfig
-	lastCompressTokens int          // 上次压缩尝试时的上下文规模（防热循环）
+	lastCompressTokens int             // 上次压缩尝试时的上下文规模（防热循环）
 	compressLog        []CompressEvent // 本次 Run 的压缩记录（可观测）
+
+	// 阶段 4：账本 / 审计 / 升级。
+	taskID  types.TaskID
+	ledger  *ledger.Recorder
+	audit   store.AuditStore
+	upgrade *UpgradeConfig
+	acc     *ladder.Accumulator // 证据累积器（upgrade 启用时非 nil）
+	// 每轮信号（handleTurn 填写，eventLoop 消费后清零）。
+	roundFormatErrors int
+	roundProgress     bool
+	roundErrorClass   wire.ErrorClass
+	// 逐轮用量累计（换模型审计的真实统计源）。
+	cacheHits int64
+	cacheMiss int64
+	// Transient（Part 3.6）：尾部 volatile 提示，不入 Log，下一轮编译后丢弃。
+	transients []string
+
+	// 阶段 5：拓扑与消息。
+	parentID      types.AgentID
+	maxDepth      int
+	mailbox       <-chan proto.Envelope
+	spawner       proto.Spawner
+	reporter      ReportSink
+	reportChecker proto.ReportChecker
+	// 子状态（pump 与主 goroutine 并发访问，mu 保护）。
+	mu              sync.Mutex
+	pendingChildren map[types.AgentID]bool
+	childrenStatus  map[types.AgentID]types.ChildStatus
+	childReports    []*proto.ChildReport
+	reportsDone     chan struct{}
+	// 本 Agent 的任务终态信号（子：report 已投递）。
+	reported bool
+	// 成功写入的文件（机械检查的数据源；file_write 成功时记录）。
+	writtenFiles map[string]bool
 
 	blockReason types.BlockReason // 与 state 的双向约束见 types.BlockReason
 
@@ -159,6 +225,27 @@ func New(cfg Config) (*Agent, error) {
 			return nil, fmt.Errorf("agent: compression policy: %w", err)
 		}
 	}
+	// 阶段 4：升级装配校验。
+	var acc *ladder.Accumulator
+	if cfg.Upgrader != nil {
+		switch {
+		case cfg.Upgrader.Router == nil:
+			return nil, fmt.Errorf("agent: Upgrader.Router is required")
+		case cfg.Upgrader.Ladder == nil:
+			return nil, fmt.Errorf("agent: Upgrader.Ladder is required")
+		case cfg.Upgrader.Catalog == nil:
+			return nil, fmt.Errorf("agent: Upgrader.Catalog is required")
+		}
+		var err error
+		acc, err = cfg.Upgrader.newAccumulator()
+		if err != nil {
+			return nil, fmt.Errorf("agent: upgrade policy: %w", err)
+		}
+	}
+	// 阶段 5 装配校验：report 通道与机械检查必须成对出现（原则 4）。
+	if cfg.ReportSink != nil && cfg.ReportChecker == nil {
+		return nil, fmt.Errorf("agent: ReportChecker is required when ReportSink is set (un-checked reports violate principle 4)")
+	}
 	return &Agent{
 		id:               cfg.ID,
 		depth:            cfg.Depth,
@@ -168,6 +255,21 @@ func New(cfg Config) (*Agent, error) {
 		thinking:         cfg.Thinking,
 		maxContextTokens: cfg.MaxContextTokens,
 		compress:         cfg.Compression,
+		taskID:           cfg.TaskID,
+		ledger:           cfg.Ledger,
+		audit:            cfg.Audit,
+		upgrade:          cfg.Upgrader,
+		acc:              acc,
+		parentID:         cfg.ParentID,
+		maxDepth:         cfg.MaxDepth,
+		mailbox:          cfg.Mailbox,
+		spawner:          cfg.Spawner,
+		reporter:         cfg.ReportSink,
+		reportChecker:    cfg.ReportChecker,
+		pendingChildren:  map[types.AgentID]bool{},
+		childrenStatus:   map[types.AgentID]types.ChildStatus{},
+		reportsDone:      make(chan struct{}, 1),
+		writtenFiles:     map[string]bool{},
 		nextPosition:     1.0,
 		log:          cfg.Log,
 		views:        cfg.Views,
@@ -227,6 +329,23 @@ func (a *Agent) AppendUser(ctx context.Context, text string) error {
 	return nil
 }
 
+// AppendInjected 追加一条父注入的消息（Part 9.5 的注入段；Spawner 的
+// ChildFactory 在建子时调用，先于 AppendUser）。
+//
+// 前置条件：e.Prov == ProvInjected 且 SourceIDs 指向父 Log 的条目（血缘是
+// 注入的唯一凭据——调用方负责构造，本方法校验并拒绝裸的 original 条目）。
+func (a *Agent) AppendInjected(ctx context.Context, e *types.LogEntry) error {
+	if e.Prov != types.ProvInjected || len(e.SourceIDs) == 0 {
+		return fmt.Errorf("agent: AppendInjected requires Prov=Injected with SourceIDs (lineage is the only credential of an injected message)")
+	}
+	e.AgentID = a.id
+	if _, err := a.log.Append(ctx, e); err != nil {
+		return fmt.Errorf("agent: append injected: %w", err)
+	}
+	a.addToView(RoleForLogRole(e.Role), e.ID)
+	return nil
+}
+
 // addToView 追加 ViewItem（Position 步进）。稳定性档次的声明在这里显式：
 // 所有经 Log 驱动的条目都是 stable——frozen 由编译层按 SegmentKind 授予，
 // volatile 只属于不入 Log 的 Transient（Part 3.3 的边界，阶段 2 无 Transient）。
@@ -248,18 +367,37 @@ func (a *Agent) addToView(role types.WireRole, ref types.MessageID) {
 // Run 运行主循环把状态机从 Idle 推到 Running，任务结束回 Idle。
 //
 // 退出路径（全部显式）：
-//   - eventLoop 完成 → Idle，返回 nil；
-//   - ctx 取消 → Running 直接退出，返回 ctx.Err()（调用方决定是否重启）；
+//   - eventLoop 完成（含子 Agent 的 report 已投递）→ Idle，返回 nil；
+//   - fork 后等待子 report（errWaitChildren）→ Blocked(WaitChildren)，
+//     全部子归位后恢复 Running 继续循环（Part 8.3）；
+//   - ctx 取消 → 当前状态直接退出，返回 ctx.Err()（调用方决定是否重启）；
 //   - 轮数耗尽 / LLM 失败 / 工具基础设施故障 → 返回错误，状态落 Idle
-//     （阶段 2 不做_blocked 状态；错误恢复属阶段 2 之外的"不做"清单）。
+//     （错误恢复属后续阶段的"不做"清单）。
 //
 // View 在退出时写盘一次（Part 8.8 写入纪律的阶段 2 形态）。
+// Mailbox 泵在进入 Running 时启动（Part 8.8：LLM 调用期间 mailbox 继续
+// 累积，人类的插话在下一轮编排时被看到）。
 func (a *Agent) Run(ctx context.Context) error {
 	if a.state.Valid() && a.state != types.StateIdle {
 		return fmt.Errorf("agent: Run on state %q (must be fresh instance or Idle)", a.state)
 	}
 	a.state = types.StateRunning
-	err := a.eventLoop(ctx)
+	a.startPump(ctx)
+	var err error
+	for {
+		err = a.eventLoop(ctx)
+		if err == nil {
+			break // 任务完成（或子已 report）
+		}
+		if errors.Is(err, errWaitChildren) {
+			if werr := a.awaitChildren(ctx); werr != nil {
+				err = werr
+				break
+			}
+			continue // 子结果已落 Log+View，下一轮编排自然看到
+		}
+		break // 其它错误原样上抛
+	}
 	a.state = types.StateIdle
 	if saveErr := a.views.SaveView(ctx, a.view); saveErr != nil {
 		// View 写失败不掩盖业务结论（它是投影的持久化，可重建）；
