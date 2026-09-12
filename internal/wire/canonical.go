@@ -160,7 +160,7 @@ type ToolDef struct {
 //
 // OutputJSON 是**语义层**的"要求合法 JSON 输出"声明（阶段 1 补，见 ADR-0017）：
 // 它不说"用哪个字段表达"，那是 Normalizer 的事（OpenAI 兼容线路翻译成
-// response_format={"type":"json_object"}，Anthropic 线路没有对应字段，
+// response_format={"type":"json_object"}；其它厂商没有对应字段时
 // 只能降级成 prefill/工具调用）。放在 Canonical 而不是 WireRequest，是为了
 // 让"我要 JSON"这个需求不依赖具体厂商——它同时也是 TaskPolicy.OutputFormat
 // 那类语义需求的落点。

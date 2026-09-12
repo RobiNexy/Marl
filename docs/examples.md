@@ -81,11 +81,8 @@ Agent 调 request_human → 路由（有父走父信箱封；否则人类文件�
 
 ## 线路（Wire）
 
-两种线路可用（Part 10.2）：
-
-- `openai_chat`（DeepSeek 现行形态；隐式前缀缓存）
-- `anthropic_messages`（顶层 system、tool_use/tool_result 块、
-  thinking 块 + budget 控制；测试面含 httptest 端到端回放）
+当前唯一实现的线路：`openai_chat`（DeepSeek 的现行形态；隐式前缀缓存）。
+其它厂商属于"留接口、暂不实现"（Part 10.x 的设计记录）。
 
 并发面（Part 9.8/10.12）：`wire.PoolImpl`（深度优先队列 + MaxInflight
 + RPM 令牌桶 + 连续失败熔断 + 健康快照），通过 `wire.NewPool(cfg,

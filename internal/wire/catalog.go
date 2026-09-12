@@ -12,7 +12,7 @@ import (
 // 被回落成 CacheImplicitPrefix**。缓存的两种模式对外行为完全不同：
 // 隐式前缀缓存靠"前缀稳定就自动命中"，显式断点缓存必须由 Normalizer 在特定
 // 消息上打 cache_control。把显式协议误当隐式协议，结果是**缓存永不命中**——
-// 没有报错、没有告警，只是账单变成两倍（Anthropic 的输入价差尤其明显）。
+// 没有报错、没有告警，只是账单变成两倍。
 // 因此未识别值的处置是回落到 CacheNone（不假设能缓存，也就不会误以为省钱），
 // 并由加载期校验报错。
 type CacheMode string
@@ -20,7 +20,7 @@ type CacheMode string
 const (
 	// CacheImplicitPrefix：保持前缀稳定就自动缓存（Deepseek）。
 	CacheImplicitPrefix CacheMode = "implicit_prefix"
-	// CacheExplicitBreakpoint：需要在特定消息上标 cache_control（Anthropic）。
+	// CacheExplicitBreakpoint：需要在特定消息上标 cache_control（显式断点协议）。
 	CacheExplicitBreakpoint CacheMode = "explicit_breakpoint"
 	CacheNone               CacheMode = "none"
 )

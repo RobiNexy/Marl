@@ -4,8 +4,7 @@
 **范围**：设计文档 13.12（阶段 10）的全部交付物——"不做"清单清零 +
 打磨清单。
 **性质**：全量测试——单元测试（`-race`）+ **真机**功能测试
-（models probe 走 DeepSeek 真机、vendor/promote 用真 fossil、
-httptest 回放 Anthropic 全链路）。
+（models probe 走 DeepSeek 真机、vendor/promote 用真 fossil）。
 
 ---
 
@@ -15,7 +14,6 @@ httptest 回放 Anthropic 全链路）。
 
 | 交付项（13.12） | 结果 | 证据 |
 | :-- | :-- | :-- |
-| Anthropic wire（复用大部分 Normalizer） | ✅ | `internal/wire/anthropic.go`（Normalizer/Adapter/Denormalizer 三件套 + httptest 端到端：顶层 system、tool_use/tool_result 块、thinking 块+budget、metadata.user_id=每 Agent 缓存桶、usage 四字段映射） |
 | 能力探测 `marl models probe` | ✅ 真机 | DeepSeek 真机：deepseek-flash / deepseek-v4-pro 三判据全 PASS（chat 200 / tool_calls=1 / cached_tokens=1024 & 1280） |
 | escalate（复用讨论的阻塞/恢复） | ✅ | `internal/escalate`（路由 + 人类文件信箱 + Manager 分发）；Agent 侧 Blocked(Escalating) 全闭环（generic 集成 TestEscalationFullLoopHuman）；父路径框架 ACK 经真实 spawner.SendTo 回程（TestEscalationParentACKByPump） |
 | request_human 三形态 | ✅ | 路由判定 3 态（父在→父信箱 / 父 Blocked→人类信箱 / 无出口→显式报错）+ 信封回程 + done/ 触发回程的端到端（escalate 包验证） |
@@ -46,7 +44,6 @@ go test ./... -race -count=1       # 全部通过（20 个包；新增 45+ 例�
 | 包 | 覆盖要点 |
 | :-- | :-- |
 | **internal/wire (pool_impl)** | 深度优先队列（in-flight=1 时 deep 先行 + 同 depth FIFO）·熔断（阈值/短路/半开）·Inflight 口径（排队计入）·ctx 取消不泄漏（worker 惰性跳过） |
-| **internal/wire (anthropic)** | BuildRequest 的 system/max_tokens/合块/Assert 拒绝（4 个用作例）·httptest 端到端（请求体头面 + 混合流 Outcome 序 + usage 映射）·HealthCheck（2xx/非2xx） |
 | **internal/escalate** | Route 三态 + 无出口报错；submit→reply 的 nonce 频度（**nonce 不匹配的 done 文件不解除等待**——原则 4 裁决凭据面）；Manager 的父路径（第一 param + deliver）与 human 路径（真信箱 roundtrip） |
 | **internal/knowledge (vendor)** | Promote → 全局库条目（author=human commit + hash 返回）；Pull → 逐字节一致 + lock；lock 再解析；全局空库显式报错 |
 | **internal/agent** | request_reconfigure 的意图面（BAD_ARGS 与回填）·ApplyReconfigure（三校验/归属检查/替换语义）·auto_discuss 折算（write→discussion）·golden（意图表序 + frozen 前缀） |
@@ -104,16 +101,7 @@ VENDOR_ROUNDTRIP_OK
 
 ## 4. 实测缺陷与修复
 
-### 4.1 Anthropic tool 调用 Outcome 的丢调用（主实现缺陷，测试前发现）
-
-**现象**：httptest 回放的响应含 tool_use 块，但 Denormalizer 的混合流
-只产出了 thinking 与 text——tool calls 丢了。
-**归因**：buildAnthropicTurn 收集了 pendingCalls 却忘了 append 成一个
-Outcome（初写的 unfold 只做了收集）。
-**修复**：pendingCalls 显式成一个 Outcome（Usage 共享——与 OpenAI 形态的
-记账纪律一致）。
-
-### 4.2 probe 的 usage 键层次（真机校准）
+### 4.1 probe 的 usage 键层次（真机校准）
 
 **现象**：cached_tokens 恒 0。
 **归因**：cachedTokensOf 收其 prompt（envelope）而不是 usage 于响应
@@ -121,12 +109,12 @@ envelope 的 "usage" 键——一层之差。
 **修复**：取 usageOf(out) 再判；并把 DeepSeek 顶层
 `prompt_cache_hit_tokens` 纳入容差（**真机校准的字段清单**）。
 
-### 4.3 models probe 报告的 "\n" 字面量（写手疏漏）
+### 4.2 models probe 报告的 "\n" 字面量（写手疏漏）
 
 fmt 字符串里 `\\n` 被写字面量替换成了字面 \ —首发发现 hassle 输出。
 **修复**：字符串面改回 `\`n`（审视命令面输出的一行一欣赏）。
 
-### 4.4 三个 CLI 子命令的 flag 顺序（知识 vendoring）
+### 4.3 三个 CLI 子命令的 flag 顺序（知识 vendoring）
 
 **现象**：`marl knowledge promote http.md -global …`（positional 在前）在
 Go flag 的停止 semantics 下 lost `-global`（缺省回退到 XDG 形态）。
@@ -139,9 +127,7 @@ Go flag 的停止 semantics 下 lost `-global`（缺省回退到 XDG 形态）�
 
 | 文件 | 内容 |
 | :-- | :-- |
-| `internal/wire/anthropic.go` (+test) | Anthropic 三件套（internal/wire 的 Normalizer/Adapter/Denormalizer）+ httptest 端到端 |
 | `internal/wire/pool_impl.go` (+test) | PoolImpl（深度优先队列/令牌桶/熔断/健康/Inflight） |
-| `internal/types/ids.go` | WireAnthropicMessages（Valid 表收敛） |
 | `internal/proto/{escalation,reconfigure}.go` | EscalationRule.Validate / ReconfigureRequest.Validate（phase-0 占位清零） |
 | `internal/escalate/{doc,mailbox,manager}.go` (+test) | escalate：路由 + 人类文件信箱 + Manager（Send/WaitBack/DeliverReply） |
 | `internal/agent/{escalate,reconfigure}.go` (+tests) | request_human / request_reconfigure 意图面 + ApplyReconfigure（三校验 + 缓存失效审计）+ auto_discuss 折算 |
@@ -155,28 +141,21 @@ Go flag 的停止 semantics 下 lost `-global`（缺省回退到 XDG 形态）�
 
 ## 6. 已知限制与盲区（诚实清单）
 
-1. **Anthropic 线路的历史 thinking 块**：请求侧承载把 Reasoning 以纯文本
-   thinking 块发出（Anthropic 的 thinking 块要求 signature；本框架不保留
-   签名，经此路径的请求内容 = text 语义（可追本治疗的还原注释）——
-   真 API 的 thinking 续写对话特征没有真机验证（本报告的 e2e 面），
-   httptest 承载的是协议面），随所以（多份工作）该处需真机后再校准。
-2. **Pool 的接线深度**：Pool 是**库面**（类型 + 测试完全、上下文的
+1. **Pool 的接线深度**：Pool 是**库面**（类型 + 测试完全、上下文的
    机制面就位）；cmd/mini / fork_test 的行仍在 direct 通路（单 endpoint
    场景下 MaxInflight 的表达面=1），接线形态（caller 闭包是否把
    Denormalizer 一起注入）留给 daemon 主装配（13.5 的 SpawnRequest）
    ——文档在 pool.go 头注，标记是**[阶段边界]**不是完成。
-3. **escalation 的父路径**：Managers 的 ACK 是框架自动回复——"父读取并
+2. **escalation 的父路径**：Managers 的 ACK 是框架自动回复——"父读取并
    答复"（Part 11.3 的父 Agent 主动回复语义）由父的上下文推进（机制面
    ready），阶段 10 的 ACK 形态不会被误读为"父已答复"（ACK 的文本面
    写明"后续动作尚未执行"）。[推理边界显式记录]
-4. **vendor lock 的粒度**：单条 promote/pull 记录 tip hash；多版本条目
+3. **vendor lock 的粒度**：单条 promote/pull 记录 tip hash；多版本条目
    + per-entry artifact（Part 12.7 的下代形态）待使用场景出现再看。
-5. **Watchdog 的预算与 status**：全局常量（阶段 9 记录）；标黄与
+4. **Watchdog 的预算与 status**：全局常量（阶段 9 记录）；标黄与
    status 的黄块也已并存——它们来自不同事件面（agent_state vs
    watchdog_no_progress），daemon 化 status 直读进程表后合并。
-6. **Assumptions made**：
-   - `max_tokens` 的默认值与 Anthropic 的其它字段：协议面显式必填的
-     `max_tokens` 由 Assert 校验（Sampling.MaxTokens>0）。
+4. **Assumptions made**：
    - probe 的 cache 判据假设"两次同文（含 first call cached_tokens=0
      本次）→ 第二次 hit>0"——真机 PASS，不作全局绑定（不同厂商的缓存
      语义差异以 caps.CacheMode 报表，见 Part 10.13 的 caps_override 面）。

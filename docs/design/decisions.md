@@ -385,9 +385,9 @@ Normalizer 决定：
 （照发是 400 = capability 错误；不发是"输出不保证是合法 JSON"，上层要么重试要么自己容错
 ——两种处置的差别必须让上层看见）。
 
-**理由**：OpenAI 兼容线路把它翻译成 `response_format={"type":"json_object"}`，而 Anthropic
-线路**没有对应字段**，只能降级成 prefill 或工具调用。把 `response_format` 放进
-`CanonicalRequest` 等于把一条线路的字段名写进承重结构，"换厂商 = 加一个适配器"立刻失效。
+**理由**：OpenAI 兼容线路把它翻译成 `response_format={"type":"json_object"}`；把
+`response_format` 放进 `CanonicalRequest` 等于把一条线路的字段名写进承重结构，
+"换厂商 = 加一个适配器"立刻失效。
 
 **回退代价**：语义需求与厂商字段再次混在同一个结构里，则每个消费点都要知道"这条线路上
 要 JSON 该怎么表达"，新增线路时要回头改 `CanonicalRequest` 及其全部构造者。

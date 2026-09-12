@@ -898,7 +898,7 @@ type SamplingParams struct {
 
 type ThinkingSpec struct {
     Level   string         `yaml:"level"`    // 模型原生档位名（字符串），不全局枚举
-    Budget  *int           `yaml:"budget"`   // budget 控制模式的 token 预算（如 Anthropic）
+    Budget  *int           `yaml:"budget"`   // budget 控制模式的 token 预算
     Display ThinkingDisplay `yaml:"display"` // 呈现与审计开关
 }
 
@@ -932,7 +932,7 @@ type ContextPolicy struct {
 
 **关键设计原则（Patch 1 重设计）**：
 
-- **档位不再是整数，也不全局枚举。** `Level` 是字符串，用模型原生名字（DeepSeek 现行是 `"none"` / `"low"` / `"high"` / `"max"`，Anthropic 是 `"off"` / `"any"`；框架自己的开关词是 `"off"` / `"on"`，由 Normalizer 按 `ThinkingControl` 翻译，见 ADR-0020）。未来某模型加 10 挡，直接改 `models.yaml` 里的 `thinking_levels` 即可，框架代码对挡位数完全无感。
+- **档位不再是整数，也不全局枚举。** `Level` 是字符串，用模型原生名字（DeepSeek 现行是 `"none"` / `"low"` / `"high"` / `"max"`；框架自己的开关词是 `"off"` / `"on"`，由 Normalizer 按 `ThinkingControl` 翻译，见 ADR-0020）。未来某模型加 10 挡，直接改 `models.yaml` 里的 `thinking_levels` 即可，框架代码对挡位数完全无感。
 - **档位是模型属性，不是全局属性。** 同一套 `ThinkingSpec` 在不同模型上解析出不同的实际档位，由 Normalizer 按 `ModelCaps.ThinkingLevels` 翻译（见 Part 10.10）。
 - `Enabled` / `MaxThinkTokens` 被拆掉：`Enabled` 等价于 `Level == "off"`；`MaxThinkTokens` 只对 budget 控制模型有意义，即 `Budget` 字段。
 
@@ -1274,8 +1274,6 @@ ladder:
     description: "更强模型，适合复杂推理"
 
   - id: "r3"
-    endpoint: "anthropic-main"
-    model: "anthropic/sonnet-4.6"
     thinking: {level: "on", budget: 4096}   # budget 控制模型（ThinkControlBudget）语法
     description: "换厂商，缓存重建"
 ```
@@ -2120,9 +2118,6 @@ models:
       reasoning_per_mtok: 16.0
       currency: "CNY"
 
-  - id: "anthropic/sonnet-4.6"
-    provider: "anthropic"
-    wire: "anthropic_messages"
     remote_name: "claude-sonnet-4-20250514"
     caps:
       has: [tool_call, thinking, json_mode, vision]
@@ -2147,7 +2142,6 @@ models:
 - `max_context` / `max_output`：窗口大小
 - `cache_mode`：
   - `implicit_prefix`：保持前缀稳定就自动缓存（Deepseek）
-  - `explicit_breakpoint`：需要在特定消息上标 `cache_control`（Anthropic）
   - `none`：不支持缓存
 - `unsupported_params`：API 不接受的采样参数（Normalizer 需剔除）
 - `thinking_control`：思维控制方式——`bool`（仅开关）/ `level`（离散档位）/ `budget`（连续 token 预算），见 Part 6.3
@@ -2169,8 +2163,6 @@ endpoints:
     max_inflight: 5
     rpm: 60
 
-  - name: "anthropic-main"
-    base_url: "https://api.anthropic.com"
     key_ref: "env:ANTHROPIC_API_KEY"
     max_inflight: 3
     rpm: 50
@@ -2211,15 +2203,13 @@ ladder:
     description: "更强模型，换 model_id，缓存重建"
 
   - id: "r3"
-    endpoint: "anthropic-main"
-    model: "anthropic/sonnet-4.6"
     thinking: {level: "on", budget: 4096}  # budget 控制模型（ThinkControlBudget）语法
     description: "顶级，换厂商，缓存重建"
 ```
 
 **thinking 开关在阶梯级别，不在 model 定义里**。同一个 model 开不开思维是两级——这正是你的核心需求：先用关思维的强模型，卡住了给它开思维，还卡住了才换模型。
 
-档位是**字符串 + 模型相关**（Patch 1）：`level` 的值必须在对应模型的 `thinking_levels` 里，写错由 Normalizer 记 `DegradThinkingLevel` 降级而不是崩溃。budget 控制模型（如 Anthropic）不填 `budget` 时由模型默认行为决定。
+档位是**字符串 + 模型相关**（Patch 1）：`level` 的值必须在对应模型的 `thinking_levels` 里，写错由 Normalizer 记 `DegradThinkingLevel` 降级而不是崩溃。budget 控制模型不填 `budget` 时由模型默认行为决定。
 
 **唯一真相是 `Binding.Thinking`（ADR-0022，阶段 1 探测 §3.1 的裁决）**：档位配在**阶梯**上，
 装配层把它拷进 `CanonicalRequest.Thinking`，Normalizer 侧再加一层保险——`req.Thinking` 为空时
@@ -2314,7 +2304,7 @@ type Binding struct {
 
 | 决策点 | 取值枚举 | 说明 |
 | :-- | :-- | :-- |
-| 多条 system | `first_only_rest_as_user` / `concat_all` / `prepend_concat` | Anthropic 只认第一条，Deepseek 全拼 |
+| 多条 system | `first_only_rest_as_user` / `concat_all` / `prepend_concat` | 多 system 的厂商行为：DeepSeek 支持多条拼接 |
 | 连续同角色 | `merge_with_separator` / `interleave_empty` / `keep_as_is` | 严格交替协议需插空 assistant |
 | 尾部 assistant（prefill） | `native_prefill` / `demote_to_tail_hint` / `drop` | DeepSeek 的 prefill 是 **Beta**：必须用 `base_url=https://api.deepseek.com/beta`，且最后一条消息 role 必须是 `assistant` 并带 `"prefix": true`。正式端点上的行为**未实测**，阶段 1 按 `demote_to_tail_hint` 保守处理 |
 | tool_result 承载 | `native_tool_role` / `inline_as_user` | OpenAI 兼容有 tool role，其他可能没有 |
@@ -2583,7 +2573,6 @@ Router 谓词读取时优先用 override，没有才回落到 models.yaml 声明
 
 ```text
 OpenAI 兼容 → [{"type": "image_url", "image_url": {"url": <data-or-url>, "detail": <low|high|auto>}}]
-Anthropic   → [{"type": "image", "source": {"type": "base64", "media_type": <mime>, "data": <base64>}}]
 Gemini      → inline_data（bytes + mimeType）
 ```
 
@@ -3468,7 +3457,7 @@ experimental    刚 promote 上来、还没在第二个项目验证过的
     各种 usage JSON → 正确解析成 TokenUsage
 
 不做：
-  - Anthropic / 其他厂商（可以留接口，但不实现）
+  - 其他厂商（可以留接口，但不实现）
   - Pool / Router（直接硬编码调 deepseek-main）
   - 阶梯升级
   - Profile / namespace
@@ -4007,7 +3996,6 @@ L0 达标判据、哨兵、配对不变量、账本落点）见 ADR-0026。要�
 
 ```text
 补全：
-  - Anthropic wire（复用 Normalizer 大部分逻辑）
   - 能力探测（marl models probe）
   - escalate（沿用讨论分支的阻塞/恢复机制）
   - request_human 三种形态
@@ -4043,7 +4031,7 @@ L0 达标判据、哨兵、配对不变量、账本落点）见 ADR-0026。要�
 | 7 | 常驻块注入 | CanonicalRequest 含 standing_orders（✅ 已通过：compileView 段序 system→standing→私有段→历史，-race 全绿；lint 超限退出 1） |
 | 8 | 讨论闭环 | verdict @approve → 结论落地（✅ 已通过：discuss_loop全流程回放，author=agent 的草稿双版 + author=human 的 Finalize commit） |
 | 9 | 三层拓扑 | status 显示 6 节点树（✅ 已通过：topo_test 三层 2×2 收敛 + spawn_batch 部分拒绝回填 + Watchdog 终止悬停子代报 failed + status 色块/时长） |
-| 10 | 全功能 | 所有"不做"清单清零（✅ 已通过：Anthropic 线路（httptest 端到端）/ models probe 真机 PASS / 熔断+深度优先 Pool / escalate 双通道 / auto_discuss / reconfigure 三校验 / vendor+promote 真机 roundtrip / marl log+attach+conversation 导出 / golden（意图表序 + frozen 前缀）/ 审计全意图覆盖） |
+| 10 | 全功能 | 所有"不做"清单清零（✅ 已通过：models probe 真机 PASS / 熔断+深度优先 Pool / escalate 双通道 / auto_discuss / reconfigure 三校验 / vendor+promote 真机 roundtrip / marl log+attach+conversation 导出 / golden（意图表序 + frozen 前缀）/ 审计全意图覆盖） |
 
 每个阶段都是"能跑的状态"，不是"半成品"。这让 coding agent 能持续验证、持续推进，而不是写到一半发现跑不起来。
 

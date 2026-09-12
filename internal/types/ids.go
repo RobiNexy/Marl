@@ -46,7 +46,7 @@ type TraceID string
 type RungID string
 
 // WireID 标识一条线路协议。设计上只有 3–4 个（极低变化频率），
-// 如 openai_chat / anthropic_messages / gemini（Part 10.2）。
+// 如 openai_chat（Part 10.2）。
 // 放本包是因为 types.Binding 需要引用它，而 wire 包又要引用 types（避免循环依赖）。
 //
 // 零值契约：与大多数枚举不同，零值 WireID("") **不是**"未识别"，而是
@@ -62,23 +62,18 @@ const (
 	// WireOpenAIChat 是 OpenAI 兼容的 chat/completions 协议
 	// （Deepseek 走这条）。阶段 1 唯一实现的线路。
 	WireOpenAIChat WireID = "openai_chat"
-
-	//WireAnthropicMessages 是 Anthropic 的 messages 协议（阶段 10 落地；
-	// 差异面见 internal/wire 的 anthropic.go 头注：顶层 system、
-	// tool_result 以 user 块回传、assistant 的 tool_use/thinking 块）。
-	WireAnthropicMessages WireID = "anthropic_messages"
 )
 
 // Valid 报告 w 是否为已实现的线路协议。零值返回 false。
 //
-// 为什么只声明已实现的线路：anthropic_messages / gemini 在各自适配器落地时
+// 为什么只声明已实现的线路：新线路在各自适配器落地时
 // 才加入本表。先声明后实现会让"声明了但没有实现"静默存在——Router 会把它
 // 当成可路由的线路（见 ADR-0014 对"静默失效"的分类）。
 //
 // 并发：纯函数。
 func (w WireID) Valid() bool {
 	switch w {
-	case WireOpenAIChat, WireAnthropicMessages:
+	case WireOpenAIChat:
 		return true
 	}
 	return false

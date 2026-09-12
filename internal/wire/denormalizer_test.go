@@ -12,7 +12,7 @@ import (
 // otherWire 是"另一条线路"的占位值：WireID 枚举只声明已实现的线路
 // （见 types.WireID.Valid 的注释），所以这里用字面量表达"非 openai_chat 的线路"，
 // 而不是引用一个尚不存在的常量。
-const otherWire = types.WireID("anthropic_messages")
+const otherWire = types.WireID("other_wire")
 
 // respWithBody 构造一个待翻译的响应（回程翻译只读 Wire/StatusCode/Body）。
 func respWithBody(status int, body string) *WireResponse {
