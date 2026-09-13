@@ -1063,3 +1063,30 @@ serve 共用同一装配——单一实现点），http.go 是薄传输层。
 5. **配置写入先验证后落盘**（Parse + ParseLimits + ParseGateRules +
    ValidateRules 全过才写；422 带可读错误）——GUI 的保存键不会把坏
    配置写进磁盘。
+
+## ADR-0037：宿主契约层（依赖倒置收口，阶段 15）
+
+**背景**：dogfooding 后的代码审查发现——serve/attached 走了 `App`，
+但 CLI 的 say/stop **绕过了接口**（say 直写收件箱文件、stop 直发信号）；
+且 App 是具体 struct，"交互接口"只隐式存在于 HTTP 路径上。
+
+1. **契约包 `internal/contract`**：`Interaction` 接口（任务生命周期/
+   观测/交互/管理四个分组）+ 全部 DTO（AgentView/RunStatus/InboxItem/
+   GateDecision/DiscussionView/CheckResult）——零引擎依赖（只 import
+   types 与 store 的数据类型）。宿主只看契约。
+2. **三个实现，同一语义**：
+   - `server.App`（进程内直达）—— serve / GUI 后端 / attached start；
+   - `server.HTTPClient`（连 serve 的 REST/SSE）—— daemon 在跑时的
+     CLI / TUI / IDE 插件；
+   - `server.FileMailbox`（文件投递兜底）—— 无守护进程时的 say/审批/
+     讨论/配置面；引擎态操作如实报 `contract.ErrNoDaemon`。
+   一致性由**场景对拍测试**守护（同一场景驱动 App 与 HTTPClient 断言
+   同结果——TestContractConformance）。
+3. **detach 的形态统一**：`marl start --detach` = 拉起 serve（任务经
+   `-task` 载体）——之后一切宿主对后台任务都是 HTTPClient；serve.lock
+   （pid+addr）是"daemon 在吗"的判据；`marl stop` = 任务停止 + 无任务
+   时守护进程退出（POST /api/v1/shutdown）。
+4. **App 与 FileMailbox 共享 `LocalFiles` 文件核**（收件箱/审批/讨论/
+   配置/知识库）——文件可达的操作在两个实现里逐字节同语义，不写两遍。
+5. 事件流新增 JSON 游标面（`GET /api/v1/events/since/{seq}`）——
+   HTTPClient.Events 的轮询形态；SSE 保持给流式前端。

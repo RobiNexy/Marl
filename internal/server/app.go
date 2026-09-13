@@ -30,11 +30,11 @@ import (
 	"github.com/RobiNexy/Marl/internal/actor"
 	"github.com/RobiNexy/Marl/internal/agent"
 	"github.com/RobiNexy/Marl/internal/config"
+	"github.com/RobiNexy/Marl/internal/contract"
 	"github.com/RobiNexy/Marl/internal/discuss"
 	"github.com/RobiNexy/Marl/internal/escalate"
 	"github.com/RobiNexy/Marl/internal/fossil"
 	"github.com/RobiNexy/Marl/internal/gate"
-	"github.com/RobiNexy/Marl/internal/knowledge"
 	"github.com/RobiNexy/Marl/internal/ladder"
 	"github.com/RobiNexy/Marl/internal/ledger"
 	"github.com/RobiNexy/Marl/internal/ns"
@@ -76,6 +76,16 @@ type App struct {
 	vcs      *fossil.CLI
 	repo     string
 
+	// 文件面操作核（收件箱/审批/讨论/配置/知识库——App 与 FileMailbox
+	// 共用的实现）。
+	lf *LocalFiles
+	// onShutdown 是守护进程的退出钩子（serve 注入：优雅关停 http.Server；
+	// nil = 无关停面——测试直跑 App）。
+	onShutdown func()
+
+	// mu 的注入点：OnShutdown 的 setter（构造后由 serve 调用）。
+	muSet bool
+
 	// 运行态（mu 保护）。
 	runAgent     types.AgentID
 	runTask      string
@@ -112,6 +122,7 @@ func NewApp(root, dbPath, version string, opts ...Option) (*App, error) {
 	for _, o := range opts {
 		o(a)
 	}
+	a.lf = &LocalFiles{Root: a.Root, Control: ControlRootOf(root)}
 	if err := a.assemble(); err != nil {
 		return nil, err
 	}
@@ -122,6 +133,9 @@ func NewApp(root, dbPath, version string, opts ...Option) (*App, error) {
 func (a *App) assemble() error {
 	ctx := context.Background()
 	a.Control = ControlRootOf(a.Root)
+	if a.lf != nil {
+		a.lf.Control = a.Control
+	}
 
 	st, err := store.OpenSQLite(a.DBPath)
 	if err != nil {
@@ -332,15 +346,6 @@ func (a *App) StopTask(force bool) error {
 	return a.spw.Terminate(id, "stopped by human")
 }
 
-// RunStatus 是当前任务的运行态快照。
-type RunStatus struct {
-	Agent     types.AgentID `json:"agent,omitempty"`
-	Task      string        `json:"task,omitempty"`
-	StartedAt time.Time     `json:"started_at,omitempty"`
-	Active    bool          `json:"active"`
-	State     string        `json:"state,omitempty"`
-}
-
 // runActive 报告运行中的项目 Agent 是否还活着（idle/crashed = 结束）。
 func (a *App) runActive() bool {
 	_, state, ok := a.spw.ProcessOf(a.runAgent)
@@ -351,10 +356,10 @@ func (a *App) runActive() bool {
 }
 
 // CurrentRun 返回当前任务态（GUI 顶栏）。
-func (a *App) CurrentRun() RunStatus {
+func (a *App) CurrentRun() contract.RunStatus {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	out := RunStatus{Agent: a.runAgent, Task: a.runTask, StartedAt: a.runStartedAt}
+	out := contract.RunStatus{Agent: string(a.runAgent), Task: a.runTask, StartedAt: a.runStartedAt}
 	out.Active = a.runAgent != "" && a.runActive()
 	if out.Active {
 		if _, state, ok := a.spw.ProcessOf(a.runAgent); ok {
@@ -368,24 +373,12 @@ func (a *App) CurrentRun() RunStatus {
 // 观测：监督树 / 事件 / 对话 / 账单
 // ---------------------------------------------------------------------------
 
-// AgentView 是监督树的一行（GUI 的树节点）。
-type AgentView struct {
-	ID          string    `json:"id"`
-	Parent      string    `json:"parent,omitempty"`
-	Kind        string    `json:"kind"`
-	Depth       int       `json:"depth"`
-	State       string    `json:"state"`
-	PendingKind string    `json:"pending_kind,omitempty"`
-	PendingAt   time.Time `json:"pending_at,omitempty"`
-	StartedAt   time.Time `json:"started_at"`
-}
-
 // Agents 返回全部 Actor 的快照（GUI 树的数据源）。
-func (a *App) Agents() []AgentView {
+func (a *App) Agents() []contract.AgentView {
 	infos := a.spw.Snapshot()
-	out := make([]AgentView, 0, len(infos))
+	out := make([]contract.AgentView, 0, len(infos))
 	for _, p := range infos {
-		out = append(out, AgentView{
+		out = append(out, contract.AgentView{
 			ID: string(p.ID), Parent: string(p.ParentID), Kind: p.Kind,
 			Depth: p.Depth, State: string(p.State),
 			PendingKind: p.PendingKind, PendingAt: p.PendingAt, StartedAt: p.StartedAt,
@@ -439,323 +432,9 @@ func (a *App) Costs(ctx context.Context, taskID string) (*store.TaskCostSummary,
 // 交互：插话 / 收件箱 / 审批 / 讨论
 // ---------------------------------------------------------------------------
 
-// Say 给任意 Actor 发直接消息（GUI 的输入框）。
-func (a *App) Say(to, text string) error {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return fmt.Errorf("server: message text is required")
-	}
-	if to == "" || to == string(a.human) {
-		return fmt.Errorf("server: target agent id is required")
-	}
-	env := actor.Envelope{
-		From:    a.human,
-		To:      types.AgentID(to),
-		Type:    proto.MsgDirect,
-		Payload: &proto.DirectMessage{Text: text},
-	}
-	return a.spw.SendTo(types.AgentID(to), env)
-}
-
-// InboxItem 是收件箱的一行（GUI 的收件箱列表）。
-type InboxItem struct {
-	Name    string    `json:"name"`
-	Type    string    `json:"type"`
-	From    string    `json:"from,omitempty"`
-	To      string    `json:"to,omitempty"`
-	Preview string    `json:"preview,omitempty"`
-	ModTime time.Time `json:"mod_time"`
-}
-
-// Inbox 列出待处理收件（GUI 刷新用；done/ 的归档不在此列）。
-func (a *App) Inbox() ([]InboxItem, error) {
-	entries, err := os.ReadDir(filepath.Join(a.Control, "inbox"))
-	if err != nil {
-		return nil, err
-	}
-	out := []InboxItem{}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		item := InboxItem{Name: e.Name(), Type: actor.FileTypeOf(e.Name())}
-		if st, serr := e.Info(); serr == nil {
-			item.ModTime = st.ModTime()
-		}
-		if data, rerr := os.ReadFile(filepath.Join(a.Control, "inbox", e.Name())); rerr == nil {
-			if f, ok := actor.ParseInboxFileText(string(data)); ok {
-				item.From, item.To = f.From, f.To
-				item.Preview = previewOf(f.Body)
-			}
-		}
-		out = append(out, item)
-	}
-	return out, nil
-}
-
-// ReadInbox 返回收件文件全文（GUI 详情页）。
-func (a *App) ReadInbox(name string) ([]byte, error) {
-	if !safeInboxName(name) {
-		return nil, fmt.Errorf("server: invalid inbox item name")
-	}
-	return os.ReadFile(filepath.Join(a.Control, "inbox", name))
-}
-
-// GateDecision 是人类对审批请求的答复（GUI 的批准/拒绝按钮）。
-//
-// 语义：把 @ 命令行写进收件箱文件——GUI 是"人类的笔"，通道不变
-// （原则 4）；FileBackend 的 watcher 照常消费并路由回 Agent。
-type GateDecision struct {
-	Action string `json:"action"`           // allow | deny
-	Mode   string `json:"mode,omitempty"`   // once | count | tokens | always
-	Count  int    `json:"count,omitempty"`  // mode=count
-	Tokens int64  `json:"tokens,omitempty"` // mode=tokens
-	Reason string `json:"reason,omitempty"` // 批注
-}
-
-// ReplyGate 把裁决写进审批文件（id = 文件名里的 ulid 段）。
-func (a *App) ReplyGate(id string, d GateDecision) error {
-	line, lerr := gateDirectiveLine(d)
-	if lerr != "" {
-		return fmt.Errorf("server: %s", lerr)
-	}
-	name := "gate_" + id + ".md"
-	if !safeInboxName(name) || id == "" {
-		return fmt.Errorf("server: invalid gate id")
-	}
-	path := filepath.Join(a.Control, "inbox", name)
-	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("server: approval %s not in inbox (already decided?)", id)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if _, err := f.WriteString("\n" + line + "\n" + d.Reason + "\n"); err != nil {
-		return err
-	}
-	return nil
-}
-
-// gateDirectiveLine 把 GUI 的结构化裁决折算成 @ 命令行（单一换算点）。
-func gateDirectiveLine(d GateDecision) (string, string) {
-	switch d.Action {
-	case "deny":
-		return "@deny", ""
-	case "allow":
-		switch d.Mode {
-		case "", "once":
-			return "@grant once", ""
-		case "count":
-			if d.Count <= 0 {
-				return "", "count mode requires count > 0"
-			}
-			return fmt.Sprintf("@grant next %d", d.Count), ""
-		case "tokens":
-			if d.Tokens <= 0 {
-				return "", "tokens mode requires tokens > 0"
-			}
-			return fmt.Sprintf("@grant tokens %d", d.Tokens), ""
-		case "always":
-			return "@always-grant", ""
-		default:
-			return "", "unknown grant mode " + d.Mode
-		}
-	default:
-		return "", "action must be allow or deny"
-	}
-}
-
-// DiscussionView 是一次讨论的概要（GUI 的讨论列表）。
-type DiscussionView struct {
-	ID      string    `json:"id"`
-	Topic   string    `json:"topic"`
-	Dir     string    `json:"dir"`
-	ModTime time.Time `json:"mod_time"`
-}
-
-// Discussions 列出讨论（控制面 discussions/ 的目录扫描）。
-func (a *App) Discussions() ([]DiscussionView, error) {
-	base := filepath.Join(a.Control, "discussions")
-	entries, err := os.ReadDir(base)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []DiscussionView{}, nil
-		}
-		return nil, err
-	}
-	out := []DiscussionView{}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		dv := DiscussionView{ID: e.Name(), Dir: filepath.Join(base, e.Name())}
-		if st, serr := e.Info(); serr == nil {
-			dv.ModTime = st.ModTime()
-		}
-		if data, rerr := os.ReadFile(filepath.Join(dv.Dir, "draft.md")); rerr == nil {
-			// 草稿首行 = "# 草稿：讨论「topic」"——topic 的提取面。
-			line := strings.SplitN(string(data), "\n", 2)[0]
-			if i := strings.Index(line, "「"); i >= 0 {
-				if j := strings.Index(line[i:], "」"); j > 0 {
-					dv.Topic = line[i+3 : i+j]
-				}
-			}
-		}
-		out = append(out, dv)
-	}
-	return out, nil
-}
-
-// DiscussionFile 返回一次讨论的 verdict 文件路径（GUI 直接读）。
-func (a *App) DiscussionFile(id string) (verdict, draft string, err error) {
-	if !safeInboxName(id + ".x") {
-		return "", "", fmt.Errorf("server: invalid discussion id")
-	}
-	dir := filepath.Join(a.Control, "discussions", id)
-	return filepath.Join(dir, "verdict.md"), filepath.Join(dir, "draft.md"), nil
-}
-
-// ReplyDiscussion 把批注/裁决写进 verdict（GUI 的讨论回复框；approve
-// 时写 @approve 行——与 CLI/文件通道同一条路径）。
-func (a *App) ReplyDiscussion(id, annotation string, approve bool) error {
-	verdict, _, err := a.DiscussionFile(id)
-	if err != nil {
-		return err
-	}
-	if _, serr := os.Stat(verdict); serr != nil {
-		return fmt.Errorf("server: discussion %s not found", id)
-	}
-	f, err := os.OpenFile(verdict, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	var sb strings.Builder
-	sb.WriteString("\n")
-	if annotation != "" {
-		sb.WriteString(annotation + "\n")
-	}
-	if approve {
-		sb.WriteString("@approve\n")
-	}
-	_, err = f.WriteString(sb.String())
-	return err
-}
-
 // ---------------------------------------------------------------------------
 // 配置与知识（GUI 的设置页）
 // ---------------------------------------------------------------------------
-
-// ConfigRaw 返回 config.yaml 原文（GUI 编辑器的内容源）。
-func (a *App) ConfigRaw() ([]byte, error) {
-	return os.ReadFile(filepath.Join(a.Root, ".marl", "config.yaml"))
-}
-
-// WriteConfig 校验并写回 config.yaml（先 Parse+ParseLimits+ParseGateRules
-// + ValidateRules——坏配置在保存时被拦，不等到下次启动）。
-func (a *App) WriteConfig(raw []byte) error {
-	node, err := config.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("invalid yaml: %w", err)
-	}
-	limits, err := config.ParseLimits(node)
-	if err != nil {
-		return fmt.Errorf("invalid limits: %w", err)
-	}
-	rules, err := config.ParseGateRules(node)
-	if err != nil {
-		return fmt.Errorf("invalid gate_rules: %w", err)
-	}
-	probe, err := gate.NewManager(gate.ManagerConfig{Rules: rules, LLMLimits: &gate.LLMLimits{
-		MaxCalls: limits.CallTaskMax, MaxTokens: int64(limits.CallTaskMaxTokens)}})
-	if err != nil {
-		return fmt.Errorf("invalid rules: %w", err)
-	}
-	_ = probe
-	return os.WriteFile(filepath.Join(a.Root, ".marl", "config.yaml"), raw, 0o644)
-}
-
-// Profiles 返回全部 Profile 摘要（GUI 的角色列表）。
-func (a *App) Profiles() ([]types.ProfileSummary, error) {
-	return a.prof.List(), nil
-}
-
-// ProfileRaw 返回一份 profile 文件原文。
-func (a *App) ProfileRaw(id string) ([]byte, error) {
-	if !safeInboxName(id + ".yaml") {
-		return nil, fmt.Errorf("server: invalid profile id")
-	}
-	return os.ReadFile(filepath.Join(a.Root, ".marl", "profiles", id+".yaml"))
-}
-
-// WriteProfile 校验并写回 profile（写后 Reload——下个任务生效）。
-func (a *App) WriteProfile(id string, raw []byte) error {
-	if !safeInboxName(id + ".yaml") {
-		return fmt.Errorf("server: invalid profile id")
-	}
-	path := filepath.Join(a.Root, ".marl", "profiles", id+".yaml")
-	tmp := path + ".tmp"
-	if werr := os.WriteFile(tmp, raw, 0o644); werr != nil {
-		return werr
-	}
-	// 校验：临时文件参与一次完整加载。
-	probe := profile.NewLoader()
-	if lerr := probe.LoadAll(filepath.Dir(tmp)); lerr != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("invalid profile: %w", lerr)
-	}
-	if _, gerr := probe.Get(types.ProfileID(strings.TrimSuffix(id, ".yaml"))); gerr != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("invalid profile: %w", gerr)
-	}
-	if rerr := os.Rename(tmp, path); rerr != nil {
-		_ = os.Remove(tmp)
-		return rerr
-	}
-	_, rerr := a.prof.Reload()
-	return rerr
-}
-
-// KnowledgeLint 的结果透传（GUI 的知识库健康面）。
-func (a *App) KnowledgeLint() (string, error) {
-	prefDir := filepath.Join(a.Root, ".marl", "knowledge", "preferences")
-	block, err := knowledge.CompileStandingOrders(prefDir)
-	if err != nil {
-		return "", err
-	}
-	return block.Report(knowledge.MaxStandingTokens), nil
-}
-
-// KnowledgePromote / KnowledgePull 是 vendor 面（fossil；GUI 的知识库
-// 管理按钮）。
-func (a *App) KnowledgePromote(ctx context.Context, relPath, globalRepo string) (string, error) {
-	cli, err := fossil.NewCLI("")
-	if err != nil {
-		return "", err
-	}
-	marlDir := filepath.Join(a.Root, ".marl")
-	return knowledge.Promote(ctx, cli, marlDir, globalRepo, relPath)
-}
-
-// KnowledgePull 把全局库拉进 vendor/（返回条目描述）。
-func (a *App) KnowledgePull(ctx context.Context, globalRepo string) ([]string, error) {
-	cli, err := fossil.NewCLI("")
-	if err != nil {
-		return nil, err
-	}
-	marlDir := filepath.Join(a.Root, ".marl")
-	entries, err := knowledge.Pull(ctx, cli, marlDir, globalRepo)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, len(entries))
-	for i, e := range entries {
-		out[i] = e.Path
-	}
-	return out, nil
-}
 
 // Doctor 跑环境自检（GUI 的诊断页）。
 func (a *App) Doctor() []CheckResult { return RunChecks(a.Root) }
@@ -764,34 +443,10 @@ func (a *App) Doctor() []CheckResult { return RunChecks(a.Root) }
 // 是先于装配的问题）。
 func DoctorOn(root string) []CheckResult { return RunChecks(root) }
 
-// Close 释放资源（store 等；进程退出前的收尾点）。
-func (a *App) Close() { a.st.Close() }
+// Close 释放资源（store 等；进程退出前的收尾点；契约要求 error 返回）。
+func (a *App) Close() error { a.st.Close(); return nil }
 
 // ---- 小件（类型化静默窗/文件名守卫/预览）----
-
-// safeInboxName 拒绝路径穿越（GUI 的输入是外部的——比 CLI 的自查多一层）。
-func safeInboxName(name string) bool {
-	if name == "" || strings.ContainsAny(name, "/\\") ||
-		strings.Contains(name, "..") || strings.HasPrefix(name, ".") {
-		return false
-	}
-	return true
-}
-
-// previewOf 取正文首行做预览（收件箱列表）。
-func previewOf(body string) string {
-	for _, ln := range strings.Split(body, "\n") {
-		t := strings.TrimSpace(ln)
-		if t != "" && !strings.HasPrefix(t, "#") {
-			r := []rune(t)
-			if len(r) > 80 {
-				return string(r[:80]) + "…"
-			}
-			return t
-		}
-	}
-	return ""
-}
 
 // ---- 线路与目录的装配件（CLI 与测试共用）----
 
@@ -1033,3 +688,80 @@ func skillsRegistryForServer() skill.Registry {
 func (a *App) wireFactory() {
 	_ = a.spw.SetFactory(&startAgentFactory{app: a})
 }
+
+// ---------------------------------------------------------------------------
+// contract.Interaction 的实现层（依赖倒置的落点：宿主只看契约；本节是
+// App 对契约的方法面——文件面委托 LocalFiles，引擎面自己实现）。
+// ---------------------------------------------------------------------------
+
+// SendMessage 给任意 Actor 发直接消息（进程内直达：spawner 的路由面；
+// 无守护进程的宿主走 FileMailbox 的文件投递形态）。
+func (a *App) SendMessage(to, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return fmt.Errorf("server: message text is required")
+	}
+	if to == "" || to == string(a.human) {
+		return fmt.Errorf("server: target agent id is required")
+	}
+	env := actor.Envelope{
+		From:    a.human,
+		To:      types.AgentID(to),
+		Type:    proto.MsgDirect,
+		Payload: &proto.DirectMessage{Text: text},
+	}
+	return a.spw.SendTo(types.AgentID(to), env)
+}
+
+// Inbox 列出待处理收件（委托 LocalFiles）。
+func (a *App) Inbox() ([]contract.InboxItem, error) { return a.lf.Inbox() }
+
+// ReadInbox 返回收件文件全文（委托 LocalFiles）。
+func (a *App) ReadInbox(name string) ([]byte, error) { return a.lf.ReadInbox(name) }
+
+// ReplyGate 把裁决写进审批文件（委托 LocalFiles——GUI 是"人类的笔"）。
+func (a *App) ReplyGate(id string, d contract.GateDecision) error {
+	return a.lf.ReplyGate(id, d)
+}
+
+// Discussions 列出讨论（委托 LocalFiles）。
+func (a *App) Discussions() ([]contract.DiscussionView, error) { return a.lf.Discussions() }
+
+// ReplyDiscussion 把批注/裁决写进 verdict（委托 LocalFiles）。
+func (a *App) ReplyDiscussion(id, annotation string, approve bool) error {
+	return a.lf.ReplyDiscussion(id, annotation, approve)
+}
+
+// ConfigRaw 返回 config.yaml 原文（委托 LocalFiles）。
+func (a *App) ConfigRaw() ([]byte, error) { return a.lf.ConfigRaw() }
+
+// WriteConfig 校验并写回 config.yaml（委托 LocalFiles）。
+func (a *App) WriteConfig(raw []byte) error { return a.lf.WriteConfig(raw) }
+
+// Profiles 返回全部 Profile 摘要（委托 LocalFiles）。
+func (a *App) Profiles() ([]types.ProfileSummary, error) { return a.lf.Profiles() }
+
+// ProfileRaw 返回一份 profile 文件原文（委托 LocalFiles）。
+func (a *App) ProfileRaw(id string) ([]byte, error) { return a.lf.ProfileRaw(id) }
+
+// WriteProfile 校验并写回 profile（委托 LocalFiles）。
+func (a *App) WriteProfile(id string, raw []byte) error { return a.lf.WriteProfile(id, raw) }
+
+// KnowledgeLint 的结果透传（委托 LocalFiles）。
+func (a *App) KnowledgeLint() (string, error) { return a.lf.KnowledgeLint() }
+
+// KnowledgePromote 把项目知识提交进全局库（委托 LocalFiles）。
+func (a *App) KnowledgePromote(ctx context.Context, relPath, globalRepo string) (string, error) {
+	return a.lf.KnowledgePromote(ctx, relPath, globalRepo)
+}
+
+// KnowledgePull 把全局库拉进 vendor/（委托 LocalFiles）。
+func (a *App) KnowledgePull(ctx context.Context, globalRepo string) ([]string, error) {
+	return a.lf.KnowledgePull(ctx, globalRepo)
+}
+
+// OnShutdown 注入守护进程的退出钩子（serve 的装配调用）。
+func (a *App) OnShutdown(fn func()) { a.onShutdown = fn }
+
+// 编译期断言：App 满足宿主契约（依赖倒置的实现证明）。
+var _ contract.Interaction = (*App)(nil)

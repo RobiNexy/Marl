@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/RobiNexy/Marl/internal/contract"
 )
 
 // Handler 返回服务全部路由的 HTTP handler（GUI 的单一接入口）。
@@ -41,6 +43,21 @@ func (a *App) Handler() http.Handler {
 		writeJSON(w, 200, map[string]any{"agents": a.Agents()})
 	}))
 	mux.HandleFunc("GET /api/v1/events", a.hEvents)
+	mux.HandleFunc("GET /api/v1/events/since/{seq}", a.h(func(w http.ResponseWriter, r *http.Request) {
+		since, _ := strconv.ParseInt(r.PathValue("seq"), 10, 64)
+		evs, err := a.Events(r.Context(), since, 500)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"events": evs})
+	}))
+	mux.HandleFunc("POST /api/v1/shutdown", a.h(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, 200, map[string]any{"shutting_down": true})
+		if a.onShutdown != nil {
+			go a.onShutdown()
+		}
+	}))
 	mux.HandleFunc("GET /api/v1/conversation", a.h(func(w http.ResponseWriter, r *http.Request) {
 		entries, err := a.Conversation(r.Context(), r.URL.Query().Get("agent"))
 		if err != nil {
@@ -106,7 +123,7 @@ func (a *App) Handler() http.Handler {
 		if !readBody(w, r, &body) {
 			return
 		}
-		if err := a.Say(r.PathValue("id"), body.Text); err != nil {
+		if err := a.SendMessage(r.PathValue("id"), body.Text); err != nil {
 			writeErr(w, 400, err)
 			return
 		}
@@ -130,7 +147,7 @@ func (a *App) Handler() http.Handler {
 		_, _ = w.Write(data)
 	}))
 	mux.HandleFunc("POST /api/v1/inbox/gate/{id}", a.h(func(w http.ResponseWriter, r *http.Request) {
-		var body GateDecision
+		var body contract.GateDecision
 		if !readBody(w, r, &body) {
 			return
 		}
@@ -149,7 +166,7 @@ func (a *App) Handler() http.Handler {
 		writeJSON(w, 200, map[string]any{"discussions": ds})
 	}))
 	mux.HandleFunc("GET /api/v1/discussions/{id}/verdict", a.h(func(w http.ResponseWriter, r *http.Request) {
-		verdict, _, err := a.DiscussionFile(r.PathValue("id"))
+		verdict, _, err := a.lf.DiscussionFile(r.PathValue("id"))
 		if err != nil {
 			writeErr(w, 400, err)
 			return

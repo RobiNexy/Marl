@@ -4187,3 +4187,14 @@ SSE 事件流）。
 配置的写回闭环：internal/config 新增 Emit（块形态规范化发射器，Parse
 的镜像；往返语义等价测试在案）；GUI 保存 = 验证（Parse/ParseLimits/
 ParseGateRules/ValidateRules）→ 原子写。
+
+---
+
+# Part 15 补遗：宿主契约层（阶段 15，ADR-0037）
+
+依赖倒置的收口：`internal/contract.Interaction` 是宿主（CLI/GUI/WebUI/
+TUI/IDE 插件）的唯一交互契约；三个实现（进程内 App / HTTPClient /
+FileMailbox——文件投递兜底）共享同一语义，一致性由对拍测试守护；
+CLI 的 say/stop 不再绕路（say 按"daemon 在吗"挑 HTTPClient 或
+FileMailbox；stop 经契约 + `/api/v1/shutdown`）；`start --detach`
+统一为拉起 serve。依赖方向：宿主 → 契约 ← 实现，恒定指向抽象。

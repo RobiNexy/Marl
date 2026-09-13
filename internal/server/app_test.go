@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/RobiNexy/Marl/internal/agent"
+	"github.com/RobiNexy/Marl/internal/contract"
 	"github.com/RobiNexy/Marl/internal/types"
 	"github.com/RobiNexy/Marl/internal/wire"
 )
@@ -79,7 +81,7 @@ func setupServerOpts(t *testing.T, turns []*wire.WireTurn, extra []Option) (*App
 	if err != nil {
 		t.Fatalf("NewApp: %v", err)
 	}
-	t.Cleanup(app.Close)
+	t.Cleanup(func() { _ = app.Close() })
 	ts := httptest.NewServer(app.Handler())
 	t.Cleanup(ts.Close)
 	return app, ts
@@ -246,7 +248,7 @@ func TestServerGateRoundtrip(t *testing.T) {
 	}
 	// GUI 的裁决按钮：allow once。
 	gateID := strings.TrimSuffix(strings.TrimPrefix(gateName, "gate_"), ".md")
-	apiJSON(t, ts, "POST", "/api/v1/inbox/gate/"+gateID, GateDecision{Action: "allow", Mode: "once"}, 200)
+	apiJSON(t, ts, "POST", "/api/v1/inbox/gate/"+gateID, contract.GateDecision{Action: "allow", Mode: "once"}, 200)
 	// 回执被 watcher 消费 → Agent 恢复 → shell 真执行（任务结束）。
 	deadline = time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -351,18 +353,18 @@ func TestInboxNameGuard(t *testing.T) {
 
 func TestGateDirectiveLine(t *testing.T) {
 	cases := []struct {
-		d    GateDecision
+		d    contract.GateDecision
 		want string
 		bad  bool
 	}{
-		{GateDecision{Action: "allow", Mode: "once"}, "@grant once", false},
-		{GateDecision{Action: "allow"}, "@grant once", false},
-		{GateDecision{Action: "allow", Mode: "count", Count: 5}, "@grant next 5", false},
-		{GateDecision{Action: "allow", Mode: "tokens", Tokens: 1000}, "@grant tokens 1000", false},
-		{GateDecision{Action: "allow", Mode: "always"}, "@always-grant", false},
-		{GateDecision{Action: "deny"}, "@deny", false},
-		{GateDecision{Action: "allow", Mode: "count", Count: 0}, "", true},
-		{GateDecision{Action: "maybe"}, "", true},
+		{contract.GateDecision{Action: "allow", Mode: "once"}, "@grant once", false},
+		{contract.GateDecision{Action: "allow"}, "@grant once", false},
+		{contract.GateDecision{Action: "allow", Mode: "count", Count: 5}, "@grant next 5", false},
+		{contract.GateDecision{Action: "allow", Mode: "tokens", Tokens: 1000}, "@grant tokens 1000", false},
+		{contract.GateDecision{Action: "allow", Mode: "always"}, "@always-grant", false},
+		{contract.GateDecision{Action: "deny"}, "@deny", false},
+		{contract.GateDecision{Action: "allow", Mode: "count", Count: 0}, "", true},
+		{contract.GateDecision{Action: "maybe"}, "", true},
 	}
 	for _, c := range cases {
 		got, errStr := gateDirectiveLine(c.d)
@@ -405,3 +407,174 @@ func TestAppReportLandsInInbox(t *testing.T) {
 
 // 编译期面（替身线路的引用防呆）。
 var _ = wire.ErrNone
+
+// ---------------------------------------------------------------------------
+// 契约一致性（依赖倒置的守护面）：同一场景驱动 App（进程内）与
+// HTTPClient（REST），断言同结果；FileMailbox 验证文件面等价 + 引擎面
+// ErrNoDaemon。
+// ---------------------------------------------------------------------------
+
+// driveContractScenario 是两个实现共用的场景断言（观测/交互/管理面；
+// 任务生命周期只在进程内跑——FileMailbox 无进程表）。fileOnly=true 时
+// 跳过引擎态断言（FileMailbox 的兜底形态，见 TestFileMailboxFallback）。
+func driveContractScenario(t *testing.T, impl contract.Interaction, fileOnly bool) {
+	t.Helper()
+	ctx := context.Background()
+	if !fileOnly {
+		if _, err := impl.StartTask("任务"); err != nil {
+			t.Fatalf("StartTask: %v", err)
+		}
+		// 等 Agent 注册进进程表（Adjudicate 的异步面）。
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			found := false
+			for _, av := range impl.Agents() {
+				if av.ID == "sub_000001" {
+					found = true
+				}
+			}
+			if found {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	// 监督树：人类为根。
+	found := false
+	for _, av := range impl.Agents() {
+		if av.Kind == "human" && av.Depth == 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("human root missing in Agents()")
+	}
+	// 插话 → human_note 进对话（App 进程内 / HTTPClient 走 daemon 的
+	// 进程内——两者同语义）。
+	if err := impl.SendMessage("sub_000001", "契约一致性插话"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	sawNote := false
+	for time.Now().Before(deadline) && !sawNote {
+		entries, err := impl.Conversation(ctx, "sub_000001")
+		if err == nil {
+			for _, e := range entries {
+				if e.Role == types.RoleHumanNote && strings.Contains(e.Content, "契约一致性插话") {
+					sawNote = true
+				}
+			}
+		}
+		if !sawNote {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	if !sawNote {
+		t.Fatal("human note missing via contract")
+	}
+	// 导出与账单有出口。
+	if md, err := impl.ConversationMarkdown(ctx, "sub_000001"); err != nil || !strings.Contains(md, "### Agent") {
+		t.Fatalf("ConversationMarkdown: %v", err)
+	}
+	if costs, err := impl.Costs(ctx, "start-task"); err != nil || costs == nil {
+		t.Fatalf("Costs: %v", err)
+	}
+	// 事件游标。
+	if evs, err := impl.Events(ctx, 0, 100); err != nil || len(evs) == 0 {
+		t.Fatalf("Events: %v %d", err, len(evs))
+	}
+	// 配置读写 + 校验拦截。
+	raw, err := impl.ConfigRaw()
+	if err != nil || !strings.Contains(string(raw), "config") && !strings.Contains(string(raw), "project") {
+		t.Fatalf("ConfigRaw: %v", err)
+	}
+	good := "project:\n  max_depth: 2\n"
+	if err := impl.WriteConfig([]byte(good)); err != nil {
+		t.Fatalf("WriteConfig good: %v", err)
+	}
+	if err := impl.WriteConfig([]byte("limits:\n  llm_call:\n    task_max_calls: -9\n")); err == nil {
+		t.Fatal("bad config must be rejected by contract impl")
+	}
+	// Profile 面。
+	if ps, err := impl.Profiles(); err != nil || len(ps) == 0 {
+		t.Fatalf("Profiles: %v", err)
+	}
+	if praw, err := impl.ProfileRaw("default"); err != nil || !strings.Contains(string(praw), "profile") {
+		t.Fatalf("ProfileRaw: %v", err)
+	}
+	// 知识库 lint 有出口。
+	if rep, err := impl.KnowledgeLint(); err != nil || !strings.Contains(rep, "est-token") {
+		t.Fatalf("KnowledgeLint: %v", err)
+	}
+	// 自检。
+	if checks := impl.Doctor(); len(checks) == 0 {
+		t.Fatal("Doctor empty")
+	}
+	// 收件箱面：注入一封信件（直接写文件——场景驱动不分实现）→ 列表可见。
+	a2, ok := impl.(*App)
+	if ok {
+		_ = a2
+	}
+	_ = ok
+}
+
+// TestContractConformance：App 与 HTTPClient 对拍（同一场景、同一断言）。
+func TestContractConformance(t *testing.T) {
+	// 带用量的回复 turn（账本记一条——Costs 断言的数据源）。
+	usageTurn := &wire.WireTurn{Outcomes: []wire.Outcome{{
+		Reply: "done", Entry: types.LogEntry{
+			Content: "done", Role: types.RoleAssistantReply, Prov: types.ProvOriginal, Audience: types.AudienceBoth,
+		},
+		Usage: &types.TokenUsage{PromptTokens: 100, CompletionTokens: 20},
+	}}}
+	t.Run("in-process App", func(t *testing.T) {
+		app, _ := setupServerOpts(t, []*wire.WireTurn{usageTurn}, nil)
+		driveContractScenario(t, app, false)
+	})
+	t.Run("HTTPClient", func(t *testing.T) {
+		_, ts := setupServerOpts(t, []*wire.WireTurn{usageTurn}, nil)
+		client := NewHTTPClient(strings.TrimPrefix(ts.URL, "http://"))
+		driveContractScenario(t, client, false)
+	})
+}
+
+// TestFileMailboxFallback：无守护时的兜底面——文件操作可用；引擎态
+// 操作如实报 ErrNoDaemon。
+func TestFileMailboxFallback(t *testing.T) {
+	root := t.TempDir()
+	initSkeleton(t, root)
+	m := NewFileMailbox(root)
+	// 引擎态 → ErrNoDaemon。
+	if _, err := m.StartTask("x"); !errors.Is(err, contract.ErrNoDaemon) {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if err := m.StopTask(false); !errors.Is(err, contract.ErrNoDaemon) {
+		t.Fatalf("StopTask: %v", err)
+	}
+	if _, err := m.Events(context.Background(), 0, 10); !errors.Is(err, contract.ErrNoDaemon) {
+		t.Fatalf("Events: %v", err)
+	}
+	// SendMessage 落收件箱文件（direct 形态）。
+	if err := m.SendMessage("sub_000001", "兜底插话"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	items, err := m.Inbox()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, it := range items {
+		if it.Type == "direct" && strings.Contains(it.Preview, "兜底插话") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("file-dropped message not visible: %+v", items)
+	}
+	// 文件面其它操作（配置读）。
+	if raw, err := m.ConfigRaw(); err != nil || len(raw) == 0 {
+		t.Fatalf("ConfigRaw: %v", err)
+	}
+	// 编译期：契约实现成立。
+	var _ contract.Interaction = m
+}

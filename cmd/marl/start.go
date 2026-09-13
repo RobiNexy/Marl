@@ -26,8 +26,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/RobiNexy/Marl/internal/actor"
-	"github.com/RobiNexy/Marl/internal/proto"
 	"github.com/RobiNexy/Marl/internal/server"
 )
 
@@ -79,19 +77,27 @@ func cmdStart(args []string) error {
 	return runStart(root, *db, task)
 }
 
-// detachStart 把 runStart 放进后台进程（setsid 新会话——脱离当前进程组，
-// 终端关闭不带走它；日志与 PID 落控制面）。控制面上的 run.lock 是"已有
-// 后台任务在跑"的判据（stop/status 与防双跑都读它）。
+// detachStart 把 serve 守护进程放进后台（setsid 新会话；任务经 serve 的
+// -task 载体立即启动）。此后的宿主操作（say/stop/status）都是 HTTPClient
+// ——CLI 与 GUI 同一条契约路径。serve.lock 是"daemon 在吗"的判据
+// （pid + addr）。
 func detachStart(root, dbPath, task string) error {
 	controlRoot := server.ControlRootOf(root)
-	lockPath := filepath.Join(controlRoot, "run.lock")
-	if pid, ok := readRunLock(lockPath); ok && processAlive(pid) {
-		return fmt.Errorf("已有后台任务在跑（PID %d，控制面 %s）；先 marl stop 或继续观察 marl status", pid, controlRoot)
+	lockPath := filepath.Join(controlRoot, "serve.lock")
+	if pid, addr, ok := readServeLock(lockPath); ok && processAlive(pid) {
+		// daemon 已在：直接经 HTTP 启动任务（第二个任务被 409 拒绝）。
+		client := server.NewHTTPClient(addr)
+		id, err := client.StartTask(task)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("任务已在运行中的守护进程启动（PID %d，agent %s）\n", pid, id)
+		return nil
 	}
 	if err := os.MkdirAll(controlRoot, 0o755); err != nil {
 		return fmt.Errorf("mkdir control plane: %w", err)
 	}
-	logFile, err := os.OpenFile(filepath.Join(controlRoot, "start.log"),
+	logFile, err := os.OpenFile(filepath.Join(controlRoot, "serve.log"),
 		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("open control-plane log: %w", err)
@@ -101,7 +107,7 @@ func detachStart(root, dbPath, task string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(exe, "start", "-dir", root, "-db", dbPath, task)
+	cmd := exec.Command(exe, "serve", "-dir", root, "-task", task)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Stdin = nil
@@ -109,48 +115,69 @@ func detachStart(root, dbPath, task string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("detach: %w", err)
 	}
-	if err := os.WriteFile(lockPath, []byte(fmt.Sprintf("pid: %d\nstarted_at: %s\ntask: %s\n",
-		cmd.Process.Pid, time.Now().UTC().Format(time.RFC3339), task)), 0o644); err != nil {
-		return err
-	}
 	fmt.Printf("后台任务已启动（PID %d）\n  日志：%s\n  跟踪：marl status；插话：marl say；停止：marl stop\n", cmd.Process.Pid, controlRoot)
 	return nil
 }
 
-// cmdStop 终止后台任务（SIGTERM 优雅收尾：Agent 的 View 落盘 + 代报
-// 兜底；超时转强杀）。
+// readServeLock 读 serve.lock 的 pid + addr。
+func readServeLock(path string) (int, string, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, "", false
+	}
+	pid, addr := 0, ""
+	for _, ln := range strings.Split(string(data), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(ln), "pid:"); ok {
+			if p, perr := strconv.Atoi(strings.TrimSpace(v)); perr == nil {
+				pid = p
+			}
+		}
+		if v, ok := strings.CutPrefix(strings.TrimSpace(ln), "addr:"); ok {
+			addr = strings.TrimSpace(v)
+		}
+	}
+	if pid > 0 && addr != "" {
+		return pid, addr, true
+	}
+	return 0, "", false
+}
+
+// resolveDaemon 读 serve.lock 并确认进程存活（宿主选择的"daemon 在吗"面）。
+func resolveDaemon(root string) (server.InteractionClient, bool) {
+	pid, addr, ok := readServeLock(filepath.Join(server.ControlRootOf(root), "serve.lock"))
+	if !ok || !processAlive(pid) {
+		return nil, false
+	}
+	return server.NewHTTPClient(addr), true
+}
+
+// cmdStop 停止后台任务/守护进程（经契约的 HTTPClient；daemon 不在时
+// 清理陈旧锁）。
 func cmdStop(args []string) error {
 	fs := flag.NewFlagSet("marl stop", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "项目目录")
-	force := fs.Bool("force", false, "跳过优雅等待直接 SIGKILL")
+	force := fs.Bool("force", false, "跳过优雅等待直接强杀（任务取消面）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	controlRoot := server.ControlRootOf(filepathAbs(*dir))
-	lockPath := filepath.Join(controlRoot, "run.lock")
-	pid, ok := readRunLock(lockPath)
-	if !ok || !processAlive(pid) {
-		_ = os.Remove(lockPath) // 陈旧锁清理
-		return fmt.Errorf("没有在跑的后台任务（控制面 %s）", controlRoot)
+	root := filepathAbs(*dir)
+	controlRoot := server.ControlRootOf(root)
+	client, ok := resolveDaemon(root)
+	if !ok {
+		_ = os.Remove(filepath.Join(controlRoot, "serve.lock"))
+		return fmt.Errorf("没有在跑的守护进程（控制面 %s）", controlRoot)
 	}
-	if !*force {
-		if p, perr := os.FindProcess(pid); perr == nil {
-			_ = p.Signal(syscall.SIGTERM) // 优雅信号（进程自行收尾）
+	run := client.CurrentRun()
+	if run.Active {
+		if err := client.StopTask(*force); err != nil {
+			return err
 		}
-		deadline := time.Now().Add(8 * time.Second)
-		for time.Now().Before(deadline) && processAlive(pid) {
-			time.Sleep(200 * time.Millisecond)
-		}
+		fmt.Printf("任务已停止（agent %s）\n", run.Agent)
+		return nil
 	}
-	if processAlive(pid) {
-		if p, perr := os.FindProcess(pid); perr == nil {
-			_ = p.Kill()
-		}
-		fmt.Printf("已强制终止（PID %d）\n", pid)
-	} else {
-		fmt.Printf("后台任务已停止（PID %d）\n", pid)
-	}
-	_ = os.Remove(lockPath)
+	// 无进行中任务 → 守护进程退出（shutdown 钩子 → serve.lock 随之摘除）。
+	_ = client.Shutdown()
+	fmt.Println("守护进程已退出（无进行中任务）")
 	return nil
 }
 
@@ -256,12 +283,8 @@ func filepathAbs(dir string) string {
 	return abs
 }
 
-// cmdSay 处理 say 子命令（人类 → Actor 的直接消息）。
-//
-// 传输形态：**写收件箱文件**（actor.FileBackend 的 direct 形态）——say
-// 进程的进程表是空的（Agent 活在 daemon/attached 进程里），跨进程投递
-// 只能走文件通道；运行中的任务经 watcher 消费并路由。GUI 不走这里
-// （serve 的 HTTP API 在进程内直达）。
+// cmdSay 处理 say 子命令（宿主按场景挑契约实现：daemon 在 → HTTPClient
+// 进程内直达；无 daemon → FileMailbox 文件投递兜底——两个实现同一语义）。
 func cmdSay(args []string) error {
 	fs := flag.NewFlagSet("marl say", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "项目目录")
@@ -277,27 +300,21 @@ func cmdSay(args []string) error {
 	if err != nil {
 		return err
 	}
-	backend, err := actor.NewFileBackend(actor.FileConfig{
-		Root: server.ControlRootOf(root), Human: actor.HumanID(osUID()),
-	})
-	if err != nil {
-		return err
-	}
-	defer backend.Stop()
-	if to == nil || *to == "" {
+	if *to == "" {
 		return fmt.Errorf("需要 -to <agent-id>（marl status 可查运行中的 Actor）")
 	}
-	env := actor.Envelope{
-		From:    actor.HumanID(osUID()),
-		To:      actor.ActorID(*to),
-		Type:    proto.MsgDirect,
-		Payload: &proto.DirectMessage{Text: text},
+	if client, ok := resolveDaemon(root); ok {
+		if err := client.SendMessage(*to, text); err != nil {
+			return err
+		}
+		fmt.Printf("已送达 %s（经守护进程）\n", *to)
+		return nil
 	}
-	if err := backend.Deliver(env); err != nil {
+	mb := server.NewFileMailbox(root)
+	if err := mb.SendMessage(*to, text); err != nil {
 		return err
 	}
-	controlRoot := server.ControlRootOf(root)
-	fmt.Printf("已投递 MsgDirect → %s（收件箱 %s/inbox/）\n", env.To, controlRoot)
+	fmt.Printf("已投递 MsgDirect → %s（收件箱 %s/inbox/）\n", *to, server.ControlRootOf(root))
 	fmt.Println("运行中的任务会在下一轮编排看到这条消息；无运行中的任务时它留在收件箱。")
 	return nil
 }
