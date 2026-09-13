@@ -4077,3 +4077,63 @@ Part 13 交付。路线图的关键特征：
 | 4 | 每 Agent 独立缓存桶：`Binding.CacheBucket`（=AgentID）、请求 `user_id` 字段、删 `BucketStrategy`、`TestCachePrefix` 加缓存桶维度、阶段 1 探测用例 6 | Part 7.7、10.8、10.15、13.3 |
 
 **不触**：Log / View / 命名空间 / 分治 / 讨论 / 编排 / Ledger / 阶梯升级判据。
+---
+
+# Part 14. 统一 Actor 模型：人类与 Agent 的交互面统一（阶段 12 实现记录）
+
+**状态：已实现（2026-09-13）。** 本 Part 是设计定稿 + 实现记录；替换
+Part 8 中"根 Agent 特殊化"、Part 11 中"Gate 投递机制"、Part 12 中
+"marl say 专用注入"的旧描述。设计动机与完整推导见分支结论采纳稿
+（14.1 定位：这不是加层，是删特例——人类消息早就是一等 LogEntry、
+discussion/escalation 已被 Gate 收编、authorship 早就是编码字段；
+剩下的特例只需要一个动作蒸发：让人类进进程表）。
+
+## 14.1 落地面
+
+| 改动 | 实现 |
+| :-- | :-- |
+| Actor 接口 + CapSet | `internal/actor`（actor.go）：`Actor{ID/Mailbox/Capabilities}` 三方法即全部——View/Binding/Skills 不在核上（纪律 2）；`HumanCaps()` 交互面全量、认知面零值；`AgentCaps(canSpawn)` 永无 `OwnsControlPlane`（纪律 3：不对称是数据） |
+| 两条 Mailbox 后端 | `ChannelBackend`（Agent：goroutine channel + 5s 背压超时）与 `FileBackend`（Human：控制面文件 + mtime 轮询静默窗 + nonce 对账）——`MailboxBackend{Deliver/Receive}` 路由一致、传输各异（Part 14.4） |
+| HumanActor | `actor.NewHuman`：监督树的根（depth=0，caps 全量），**没有 Executor**——人类自己就是执行器（14.13 的本体论条款） |
+| 人类进进程表 | `Spawner.RegisterHuman`（创建裁决的统一入口配套）+ `Spawner.RegisterAgent`（装配级**登记** API：不创建/不启动/不裁决，只给装配自管的 Agent 进程表身份——与被删除的 Bootstrap 创建特例有本质区别） |
+| 根特例删除 | `Bootstrap` 删除；项目 Agent 经正常 `Adjudicate`（requester = 人类）；根有父（HumanActor），report/escalation 链条自然终止在拓扑顶端 |
+| 消息类型 | `MsgDirect`（收编旧 MsgHumanInput 的 say 注入）、`MsgGateRequest`/`MsgGateReply`（Gate 审批往返）；载荷类型在 `proto/messages.go` |
+| Gate 投递重构 | `gate.FileApprover` **删除**；文件编码/nonce/静默窗统一在 `actor.FileBackend`；Manager 产出 need_human **决策**（不再阻塞），裁决经 `ResolveGate` 兑现 grant + 审计 `granted_by`（授权链完整） |
+| grants/ 生命周期 | `gate.GrantStore`：permanent 级落盘 `grants/grant_<ulid>.yaml`（frontmatter 含 granted_by/granted_at），装配重启时 `LoadGrants` 回插动态规则——"人类批过的 always 不丢" |
+| Spawner 泛化 | requester 查找从统一进程表取；权威检查读 `Capabilities()`（AI = depthGate 的 Profile 谓词，人类 = CapSet.CanSpawn）；子集不变量照常（人类基准 nil = 请求即授权） |
+| max_depth 语义 | 只约束 **AI→AI fork**（Part 14.6）：深度记账在注册点映射为 `Process.AIRecursion`（拓扑事实，非权限分支）；人类 d0 → 项目 Agent d1 → …（max_depth=3 = 三层 AI，与旧编号的能力面一致） |
+| Watchdog | 扫描含挂起分支：`MarkPending/ClearPending`（discussing / awaiting_gate；escalation 无超时不登记）+ `Config.PendingOverrun`（默认语义 24h）→ `watchdog_pending_overrun` 告警——**告警不是终止**（卡死不烧钱，去留归人） |
+| marl start / say | 人类 Actor 的消息发送（cmd/marl/start.go）：start = attached 运行（人类 spawn 项目 Agent → report 回收件箱）；say = MsgDirect 经文件后端的跨进程通道（异步注入，下一轮编排自然看到） |
+| ScriptedHuman | `internal/actor/actortest`：channel 后端 + 剧本——四个场景（讨论/审批/escalation/grant）的 CI 验收测试在 `internal/agent/unify_int_test.go` |
+| audit 的 actor 字段 | `human:<uid>` / 既有 AgentID 双形态同表（AgentID 是字符串底座）；status 渲染按前缀翻译图标（👤/🤖/🔧——呈现层专用） |
+
+**不动的**（Part 14.12 的承诺兑现）：frozen 前缀经济学、阶梯、命名空间
+子集、Log/View、技能表、llm_call、缓存桶、Ledger 结构。
+
+## 14.2 实现取舍（诚实清单）
+
+- **ActorID = types.AgentID 的别名**（偏离文档 14.2 的独立类型定义）：
+  既有 Agent 身份（Log 归属 / audit 的 actor 字段 / 缓存桶 / fossil
+  author）全以 AgentID 为键，换类型等于全仓替换且无行为收益；可判别性
+  由 `human:` 前缀承担（Agent 是"无前缀"），格式契约由构造/校验函数收口。
+- **Kind 的读取只有两处**：呈现（status/start 的图标）与拓扑记账
+  （注册点把 Kind 映射为 `Process.AIRecursion`，裁决期读进程表事实）。
+  权威判断（spawn 许可、控制面写、消息发送）全部读 CapSet。
+- **Gate 回执的对账锚点在 FileBackend 的私有记忆**（Deliver 时登记
+  requestID → nonce；解析谓词校验）——陈旧回放与伪造凭据被结构性排除。
+- **归档先于投递**（收件箱消费的 exactly-once：信封出现在读端的同一
+  时刻文件已进 done/——重扫不会二次解析）。
+- **escalation 与讨论机制保留**（14.12 改动清单未列）：文件形态是收件箱
+  的子树（requests/ / discussions/ / approvals/ + grants/ 同属控制面）。
+- **MsgTaskAssign 的 pump 面就位、当前任务载体仍是 SpawnRequest.
+  TaskDescription**（Part 8.3 的不可变输入语义不变）——daemon 阶段切换
+  载体时类型表已就绪。
+
+## 14.3 验收证据
+
+- `go test ./... -race` 全绿（23 包；`-race` 为默认通过纪律）；
+- `internal/agent/unify_int_test.go`：ScriptedHuman 四场景（讨论 / 审批 /
+  escalation / grant 全流程）；
+- 真机：`marl start -dir <demo> "读 README.md…"` → 项目 Agent（AI d1）
+  经正常裁决创建 → report 落 `human:samphi` 的收件箱；
+  `marl status` 显示 `👤 human:samphi (depth=0)` 为根的监督树。

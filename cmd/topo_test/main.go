@@ -1,11 +1,15 @@
 // 命令 topo_test 是设计文档 13.11（阶段 9）的交付检查命令：
-// 三层拓扑（根 → 3 子 → 3 孙）、spawn_batch、Watchdog 强制终止——全部
-// dry-run（不联网），但 Spawner / Mailbox / 等待策略 / Watchdog 都是
-// **真实装配**。
+// 三层拓扑（人类 → 项目 Agent → 3 子 → 3 孙）、spawn_batch、Watchdog
+// 强制终止——全部 dry-run（不联网），但 Spawner / Mailbox / 等待策略 /
+// Watchdog 都是**真实装配**。
 //
-// 交付判据（13.11）：
-//   - 根 fork 3 个子，每个子 fork 1 个孙；全部 report 收敛到对应父；
-//   - 孙到 MaxDepth 时再 fork 被拒（MAX_DEPTH_REACHED 如实回传 LLM）；
+// 交付判据（13.11 + Part 14 阶段 12）：
+//   - 人类 Actor 是监督树的根（depth=0，caps 全量）；项目 Agent 经正常
+//     Spawner 裁决创建（requester = 人类——旧 Bootstrap 特例删除）；
+//   - 项目 Agent fork 3 个子，每个子 fork 1 个孙；全部 report 收敛到对应父；
+//   - 深度只记 AI→AI（max_depth=3：d1/d2/d3 三层 AI）；孙到 MaxDepth 时
+//     再 fork 被拒（MAX_DEPTH_REACHED 如实回传 LLM）；
+//   - 项目 Agent 完成 → report 投给人类收件箱（文件后端的 channel 面）；
 //   - Watchdog 终止悬停子 → 框架代报 failed → 父收到；
 //   - `marl status` 能显示完整树（status 渲染面的数据源=进程表快照，
 //     本命令直接打印；audit 还原形态的验证在 cmd/marl/status_render_test）。
@@ -26,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"marl/internal/actor"
 	"marl/internal/agent"
 	"marl/internal/ns"
 	"marl/internal/proto"
@@ -82,7 +87,8 @@ func run(showWatchdog bool) error {
 	}
 
 	spw, err := spawner.New(spawner.Config{
-		MaxDepth:      2,
+		// Part 14.6：max_depth 只约束 AI→AI fork（d1/d2/d3 三层 AI）。
+		MaxDepth:      3,
 		MaxActive:     16,
 		MaxForkRounds: 3,
 		// 深度权限全开：到顶拒绝的判据是 MAX_DEPTH_REACHED（不是角色）。
@@ -94,10 +100,16 @@ func run(showWatchdog bool) error {
 		return fmt.Errorf("spawner: %w", err)
 	}
 
-	parentNS := &types.Namespace{AgentID: "root-1", Mounts: []types.Mount{
-		{Pattern: "**", Mode: types.PathWrite},
-	}}
-	mb := spw.Bootstrap("root-1", parentNS)
+	// 统一 Actor 面（Part 14.2/14.3）：人类是进程表的根——这里用 channel
+	// 后端（演示进程内直接收 report；生产的物理形态是控制面文件后端）。
+	humanBackend := actor.NewChannelBackend(16)
+	humanActor, err := actor.NewHuman(actor.HumanID("operator"), humanBackend, actor.HumanCaps())
+	if err != nil {
+		return fmt.Errorf("human actor: %w", err)
+	}
+	if err := spw.RegisterHuman(ctx, humanActor); err != nil {
+		return fmt.Errorf("register human: %w", err)
+	}
 
 	// 工厂：子的 LLM 按深度脚本；悬停标记见 BuildChild。
 	factory := &topoFactory{st: st, reg: reg, root: root, resolver: resolver, chk: chk, spw: spw}
@@ -105,36 +117,58 @@ func run(showWatchdog bool) error {
 		return err
 	}
 
-	rootAgent, err := agent.New(agent.Config{
-		ID:           "root-1",
-		SystemPrompt: "你是根 Agent：用 spawn_batch 并行分派子任务。",
-		MaxRounds:    8,
-		Log:          st, Views: st,
-		LLM:       &rootScript{},
-		Skills:    reg,
-		Namespace: parentNS, Resolver: resolver, ProjectRoot: root,
-		Sampling: types.SamplingParams{MaxTokens: 512},
-		Mailbox:  mb, Spawner: spw,
-		TaskID: "topo-task", Audit: aud,
+	// 项目 Agent 经正常裁决创建（requester = 人类——Part 14.6 的特例消除；
+	// AI 递归第 1 层）。
+	dec, err := spw.Adjudicate(ctx, &proto.SpawnRequest{
+		RequesterID:     humanActor.ID(),
+		ProfileID:       "default",
+		TaskDescription: "三个并行子任务：各 fork 一个孙写 g_[abc]_grand_out.txt；完成后汇报。",
+		WritablePaths:   []string{"**"},
 	})
 	if err != nil {
-		return fmt.Errorf("root agent: %w", err)
+		return fmt.Errorf("project agent adjudicate: %w", err)
 	}
-	if err := rootAgent.AppendUser(ctx, "三个并行子任务：各 fork 一个孙写 g_[abc]_grand_out.txt；完成后汇报。"); err != nil {
-		return err
+	if dec.Status != proto.SpawnApproved {
+		return fmt.Errorf("project agent rejected: %+v", dec)
 	}
-	if err := rootAgent.Run(ctx); err != nil {
-		return fmt.Errorf("run: %w", err)
+	_ = dec.ChildAgentID // 树的根在渲染时取人类行（Part 14.6 的人类为根）
+
+	// 等项目 Agent 的 report 到人类收件箱（Part 14.5"MsgChildReport 到
+	// 人类"——"无父收 report"的特例消失：根的父就是 HumanActor）。
+waitLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting project agent report")
+		case env := <-humanBackend.Receive():
+			if env.Type != proto.MsgChildReport {
+				continue
+			}
+			rp, ok := env.Payload.(*proto.ChildReport)
+			if !ok {
+				return fmt.Errorf("human inbox payload mismatch: %T", env.Payload)
+			}
+			fmt.Printf("（人类收件箱 ← %s：%s）\n", env.From, firstLine(rp.Report))
+			break waitLoop
+		}
 	}
-	fmt.Print(renderTree(spw, "root-1"))
+	fmt.Print(renderTree(spw, string(actor.HumanID("operator"))))
 
 	if showWatchdog {
-		if err := watchdogDemo(ctx, st, reg, resolver, chk, spw, root); err != nil {
+		if err := watchdogDemo(ctx, st, reg, resolver, chk, spw, root, humanBackend); err != nil {
 			return err
 		}
 	}
 	printFileTree(root)
 	return nil
+}
+
+// firstLine 取多行文本的首行（收件箱回执的终端显示形态）。
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // ---- 脚本与工厂 ----
@@ -151,12 +185,19 @@ type topoFactory struct {
 func (f *topoFactory) BuildChild(ctx context.Context, plan *spawner.ChildPlan, req *proto.SpawnRequest) (spawner.ChildRunner, error) {
 	// 悬停标记协议（Watchdog 演示的任务文本带"（悬停）"——工厂以此
 	// 决定 LLM 替身；真实场景的悬停发生在模型无限等待上游响应处）。
-	var llm agent.LLMExecutor = &depthScript{depth: plan.Depth, task: req.TaskDescription}
-	if strings.Contains(req.TaskDescription, "（悬停）") {
+	var llm agent.LLMExecutor
+	switch {
+	case plan.Depth == 1 && strings.Contains(req.TaskDescription, "慢子"):
+		llm = &rootSlowScript{} // Watchdog 演示的项目 Agent
+	case plan.Depth == 1:
+		llm = &rootScript{} // 项目 Agent：batch 3 子（人类是它的父）
+	case strings.Contains(req.TaskDescription, "（悬停）"):
 		llm = &hangLLM{}
+	default:
+		llm = &depthScript{depth: plan.Depth, task: req.TaskDescription}
 	}
 	child, err := agent.New(agent.Config{
-		ID: plan.ID, ParentID: plan.ParentID, Depth: plan.Depth, MaxDepth: 2,
+		ID: plan.ID, ParentID: plan.ParentID, Depth: plan.Depth, MaxDepth: 3,
 		Mailbox:      plan.Mailbox,
 		SystemPrompt: "你是子/孙 Agent：完成任务后 report。",
 		MaxRounds:    6,
@@ -177,7 +218,8 @@ func (f *topoFactory) BuildChild(ctx context.Context, plan *spawner.ChildPlan, r
 	return child, nil
 }
 
-// depthScript 按深度给脚本：depth1 再 fork 一个孙；depth2 写文件并 report。
+// depthScript 按深度给脚本（Part 14.6 记账后：d1=项目 Agent 由 rootScript
+// 承担；d2 再 fork 一个孙；d3 写文件并 report）。
 type depthScript struct {
 	depth int
 	task  string
@@ -187,7 +229,7 @@ type depthScript struct {
 func (d *depthScript) ExecuteTurn(_ context.Context, _ *wire.CanonicalRequest) (*wire.WireTurn, error) {
 	defer func() { d.round++ }()
 	switch d.depth {
-	case 1:
+	case 2:
 		switch d.round {
 		case 0:
 			// 孙的任务 = 父任务的原样透传（里面的 child_[abc] 前缀是孙
@@ -235,7 +277,8 @@ func grandPrefixOf(task string) string {
 	return "g"
 }
 
-// rootScript：batch 3 个子（await all），收齐后总结。
+// rootScript：batch 3 个子（await all），收齐后向父（人类 Actor）report
+// ——Part 14.5：项目 Agent 的 report 发给 HumanActor。
 type rootScript struct{ round int }
 
 func (r *rootScript) ExecuteTurn(ctx context.Context, _ *wire.CanonicalRequest) (*wire.WireTurn, error) {
@@ -252,15 +295,17 @@ func (r *rootScript) ExecuteTurn(ctx context.Context, _ *wire.CanonicalRequest) 
 		}
 		return turnToolT("spawn_batch", map[string]any{"items": items, "await": "all"}), nil
 	default:
-		return turnReplyT("三个子任务全部完成（带孙）。"), nil
+		return turnToolT("report_to_parent", map[string]any{
+			"status": "success",
+			"report": "三个子任务全部完成（带孙）：a/b/c 三个孙产物已就位。",
+		}), nil
 	}
 }
 
 // ---- Watchdog 演示（悬停子 → 终止 → 框架代报 failed） ----
 
-func watchdogDemo(ctx context.Context, st *store.SQLiteStore, reg skill.Registry, resolver types.Resolver, chk proto.ReportChecker, spw *spawner.Spawner, root string) error {
+func watchdogDemo(ctx context.Context, st *store.SQLiteStore, reg skill.Registry, resolver types.Resolver, chk proto.ReportChecker, spw *spawner.Spawner, root string, humanBackend *actor.ChannelBackend) error {
 	fmt.Println("\n=== Watchdog 演示（悬停子 1.5s，超时预算 0.6s）===")
-	// 新开一个 root scope（复用 spawner；进程表新开一个独立 root）。
 	wd, err := watchdog.New(watchdog.Config{
 		Table:    watchdog.AdaptTable(spw),
 		Log:      st,
@@ -278,30 +323,33 @@ func watchdogDemo(ctx context.Context, st *store.SQLiteStore, reg skill.Registry
 	wd.Start(wdCtx)
 	defer wd.Stop()
 
-	// 悬停子的父（root-2）。
-	ns2 := &types.Namespace{AgentID: "root-2", Mounts: []types.Mount{
-		{Pattern: "**", Mode: types.PathWrite},
-	}}
-	mb2 := spw.Bootstrap("root-2", ns2)
-	p2, err := agent.New(agent.Config{
-		ID: "root-2", SystemPrompt: "你是根 Agent2：fork 一个慢子。",
-		MaxRounds: 6, Log: st, Views: st, LLM: &rootSlowScript{}, Skills: reg,
-		Namespace: ns2, Resolver: resolver, ProjectRoot: root,
-		Sampling: types.SamplingParams{MaxTokens: 512},
-		Mailbox:  mb2, Spawner: spw,
-		TaskID: "watchdog-task", Audit: store.AuditSQLite{SQLiteStore: st},
+	// 悬停子的父（第二个项目 Agent——同样经人类 requester 的正常裁决，
+	// Part 14.6；工厂按任务文本里的"慢子"给 rootSlowScript）。
+	dec, err := spw.Adjudicate(ctx, &proto.SpawnRequest{
+		RequesterID:     actor.HumanID("operator"),
+		ProfileID:       "default",
+		TaskDescription: "fork 一个慢子",
+		WritablePaths:   []string{"**"},
 	})
 	if err != nil {
 		return err
 	}
-	if err := p2.AppendUser(ctx, "fork 一个慢子"); err != nil {
-		return err
+	if dec.Status != proto.SpawnApproved {
+		return fmt.Errorf("root-2 rejected: %+v", dec)
 	}
-	if err := p2.Run(ctx); err != nil {
-		return fmt.Errorf("watchdog run: %w", err)
+	// 等第二个项目 Agent 的 report 到人类收件箱（Watchdog 代报悬停子 →
+	// 根收到 → 模型收尾 → report）。
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting watchdog demo report")
+		case env := <-humanBackend.Receive():
+			if env.Type == proto.MsgChildReport {
+				fmt.Print(renderTree(spw, string(actor.HumanID("operator"))))
+				return nil
+			}
+		}
 	}
-	fmt.Print(renderTree(spw, "root-2"))
-	return nil
 }
 
 // hangLLM 是悬停替身（ExecuteTurn 阻塞至取消——真实 Watchdog 的猎物）。
@@ -317,7 +365,10 @@ func (r *rootSlowScript) ExecuteTurn(_ context.Context, _ *wire.CanonicalRequest
 			"writable_paths": []string{"src/**"},
 		}), nil
 	default:
-		return turnReplyT("Watchdog 已经代报 failed；任务收尾。"), nil
+		return turnToolT("report_to_parent", map[string]any{
+			"status": "partial",
+			"report": "Watchdog 已经代报 failed；任务收尾。",
+		}), nil
 	}
 }
 
@@ -352,9 +403,11 @@ func renderTree(spw *spawner.Spawner, rootID string) string {
 		if ok {
 			state = string(p.State)
 		}
-		icon := "🤖"
-		if depth > 0 {
-			icon = "🔧"
+		icon := "🔧"
+		if ok && p.Kind == "human" {
+			icon = "👤" // 呈现层专用（Part 14.2 纪律 1：Kind 只管渲染）
+		} else if ok && p.Kind == "agent" && p.Depth == 1 {
+			icon = "🤖" // 项目 Agent（AI 第 1 层）
 		}
 		buf += fmt.Sprintf("%s%s %s (depth=%d) %s\n", indentOf(depth), icon, id, depth, state)
 		for _, c := range children[id] {

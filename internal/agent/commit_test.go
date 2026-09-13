@@ -16,6 +16,7 @@ import (
 
 	"marl/internal/store"
 
+	"marl/internal/actor"
 	"marl/internal/fossil"
 	"marl/internal/spawner"
 	"marl/internal/types"
@@ -55,10 +56,11 @@ func setupCommit(t *testing.T, nChildren int) (*Agent, *spawner.Spawner, *forkFa
 		t.Fatal(err)
 	}
 	spw, err := spawner.New(spawner.Config{
-		MaxDepth:        1,
+		// Part 14.6：人类 d0 → 项目 Agent（父，d1）→ 子 d2；max_depth=2 顶格。
+		MaxDepth:        2,
 		MaxActive:       8,
 		MaxForkRounds:   8,
-		CanSpawnAtDepth: func(depth int) bool { return depth == 0 },
+		CanSpawnAtDepth: func(depth int) bool { return depth == 1 },
 		Log:             st,
 	})
 	if err != nil {
@@ -67,7 +69,11 @@ func setupCommit(t *testing.T, nChildren int) (*Agent, *spawner.Spawner, *forkFa
 	parentNS := &types.Namespace{AgentID: "parent-1", Mounts: []types.Mount{
 		{Pattern: "**", Mode: types.PathWrite},
 	}}
-	mb := spw.Bootstrap("parent-1", parentNS)
+	parentBackend := actor.NewChannelBackend(32)
+	if err := spw.RegisterAgent(context.Background(), "parent-1", 1, parentNS,
+		actor.AgentCaps(true), parentBackend); err != nil {
+		t.Fatal(err)
+	}
 	ff := &forkFactory{t: t, st: st, reg: reg, root: root, spw: spw, chk: chk}
 	if err := spw.SetFactory(ff); err != nil {
 		t.Fatal(err)
@@ -84,7 +90,7 @@ func setupCommit(t *testing.T, nChildren int) (*Agent, *spawner.Spawner, *forkFa
 		Resolver:     mustResolver(t, root),
 		ProjectRoot:  root,
 		Sampling:     types.SamplingParams{MaxTokens: 512},
-		Mailbox:      mb,
+		Mailbox:      parentBackend.Receive(),
 		Spawner:      spw,
 		Committer:    &CommitConfig{VCS: cli, RepoPath: repo},
 	})

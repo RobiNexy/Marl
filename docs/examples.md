@@ -1,7 +1,30 @@
-# Marl 示例与命令面（阶段 10 的文档补全）
+# Marl 示例与命令面（阶段 10 的文档补全 + 阶段 12 的统一 Actor 面）
 
 本文是命令面的示例速查；设计文档在 `docs/design/marl_design.md`，测试
 报告在 `docs/test_report/`。
+
+## 统一 Actor 面（Part 14 / 阶段 12）
+
+人类是监督树的根（HumanActor：depth=0，caps 全量，收件箱 = 控制面
+文件树 `~/.local/state/marl/<项目名>/inbox/`）。
+
+```bash
+# 人类 spawn 项目 Agent（经正常 Spawner 裁决——旧 bootstrap 特例已删除）
+DEEPSEEK_API_KEY=sk-... marl start -dir <project> "任务描述"
+#   → attached 运行；完成后 report 落收件箱 report_<ulid>.md
+#   → 收件箱子树：gate_<ulid>.md（审批）/ direct_<ulid>.md（say）/
+#     report_<ulid>.md（report）
+
+# 人类 → Actor 的直接消息（异步注入，下一轮编排自然看到）
+marl say -dir <project> -to <agent-id> "文本"
+
+# 人类审批 Gate 请求：编辑收件箱里的 gate_<ulid>.md，把 @grant once
+# 换成 @grant next 20 / @grant tokens 50000 / @always-grant / @deny
+#   → always 落盘 grants/grant_<ulid>.yaml（重启回插，"批过的 always 不丢"）
+```
+
+进程表里的实体是 Actor：status 树以 `👤 human:<uid>` 为根，项目 Agent
+是 AI 第 1 层（max_depth 只约束 AI→AI fork——Part 14.6）。
 
 ## 建立一个项目
 
@@ -41,9 +64,9 @@ commit **author=human**。
 ## 阶段 9 · 拓扑与 Watchdog
 
 ```bash
-go run ./cmd/topo_test            # 三层拓扑（根 batch fork 3 子 × 各 1 孙）
+go run ./cmd/topo_test            # 人类为根的四层拓扑（人类 → 项目 Agent → 3 子 × 各 1 孙）
 go run ./cmd/topo_test -watchdog  # Watchdog 终止悬停子 → 框架代报 failed
-marl status -db <store.db> -color always   # 树 + 色块 + 阻塞时长
+marl status -db <store.db> -color always   # 树（👤 人类为根）+ 色块 + 阻塞时长
 ```
 
 `spawn_batch` 的 `await` 支持 all / any / n（策略单次生效后回退 all，

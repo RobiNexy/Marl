@@ -1,4 +1,5 @@
-// Package gate 实现统一审批抽象（PDP/PEP，Part 11.3，阶段 11）。
+// Package gate 实现统一审批抽象（PDP/PEP，Part 11.3；Part 14.7 重新定性
+// ——Gate 是"人类 Actor 的收件秘书"）。
 //
 // 定位：每个执行点（PEP：llm_call / 编排 / discussion / escalation / shell）
 // 在动作发生前问一次 Gate（PDP），Gate 按规则表**顺序匹配、首中生效**，
@@ -6,7 +7,15 @@
 //
 //	allow      → 立即执行
 //	deny       → 拒绝，原因回传给 LLM（带 rule_id）
-//	need_human → Approver 介入（审批文件 + nonce），裁决附带 grant
+//	need_human → 调用方折算成 MsgGateRequest，经人类 Actor 的文件后端
+//	             投递（inbox/gate_<ulid>.md，frontmatter 含 nonce）；人类的
+//	             裁决经 MsgGateReply 回到 Agent，由 ResolveGate 兑现 grant
+//
+// 阶段 12（Part 14）的结构面：审批的**投递**不再是本包的阻塞轮询（旧
+// FileApprover 已删——特例消除），文件编码/解析/静默窗统一在 actor 包
+// 的 FileBackend；本包保留的是规则表、grant 记账（session 级）与
+// GrantStore（grants/ 落盘，"人类批过的 always 不丢"）。审批者必须是
+// 规则，不是 Actor（Part 14.7 硬边界）。
 //
 // 被收编的决策面（原来四套机制 → 现在五种 Kind 的同一骨架）：
 //

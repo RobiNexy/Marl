@@ -143,6 +143,12 @@ type Config struct {
 	// ---- 阶段 11：llm_call ----
 	// LLMCall 非 nil 即启用（唯一受控副调用入口；Gate 三维度）。
 	LLMCall *LLMCallConfig
+
+	// ---- 阶段 12：统一 Actor 模型（Part 14）----
+	// Human 是人类 Actor 的交互面（监督树的根）。nil = 无人类表面——
+	// Gate 的 need_human 兑现为显式拒绝（fail-closed 与旧 Approver 缺失
+	// 同语义）；讨论/escalation 的等待面不依赖它（各有自己的通道）。
+	Human HumanLink
 }
 
 // Agent 是一个单任务的执行体（Part 8.1，阶段 2 无 Mailbox/父子拓扑）。
@@ -230,6 +236,8 @@ type Agent struct {
 	llmCallCount  int
 	llmCallTokens int64
 	gatePending   *pendingGate
+	// 阶段 12：人类 Actor 交互面（Part 14；nil = 无人类表面）。
+	human HumanLink
 	// 本 Agent 的任务终态信号（子：report 已投递）。
 	reported bool
 	// 成功写入的文件（机械检查的数据源；file_write 成功时记录）。
@@ -331,6 +339,7 @@ func New(cfg Config) (*Agent, error) {
 		discussCfg:       cfg.Discussion,
 		escCfg:           cfg.Escalation,
 		llmCallCfg:       cfg.LLMCall,
+		human:            cfg.Human,
 		pendingChildren:  map[types.AgentID]bool{},
 		childrenStatus:   map[types.AgentID]types.ChildStatus{},
 		reportsDone:      make(chan struct{}, 1),

@@ -1,7 +1,8 @@
 package spawner
 
 // Spawner 测试：裁决闸（深度/权限/上限/子集/扇出/注入）、生命周期与
-// 框架代报、命名空间构建、report 机械检查。
+// 框架代报、命名空间构建、report 机械检查；Part 14 的统一 Actor 面
+// （人类 requester → 正常裁决 / report 到人类收件箱）。
 
 import (
 	"context"
@@ -14,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"marl/internal/actor"
+	"marl/internal/actor/actortest"
 	"marl/internal/proto"
 	"marl/internal/store"
 	"marl/internal/types"
@@ -83,12 +86,57 @@ func testConfig(t *testing.T) (Config, *store.SQLiteStore) {
 	}
 	t.Cleanup(func() { lg.Close() })
 	return Config{
-		MaxDepth:        1, // 阶段 5：只有根能 fork
+		// Part 14.6 深度语义：max_depth 只约束 AI→AI fork；项目 Agent 是
+		// AI 第 1 层（人类 = depth 0 的根）。"只有项目 Agent 能 fork" =
+		// depth==1 的谓词。
+		MaxDepth:        2,
 		MaxActive:       8,
 		MaxForkRounds:   3,
-		CanSpawnAtDepth: func(depth int) bool { return depth == 0 },
+		CanSpawnAtDepth: func(depth int) bool { return depth == 1 },
 		Log:             lg,
 	}, lg
+}
+
+// registerHuman 是测试的人类登记（actortest.ScriptedHuman 的 channel
+// 后端——框架代报给人类的信封落在这里，断言用）。
+func registerHuman(t *testing.T, spw *Spawner) *actortest.ScriptedHuman {
+	t.Helper()
+	sh := actortest.New("tester")
+	if err := spw.RegisterHuman(context.Background(), sh.Actor()); err != nil {
+		t.Fatalf("RegisterHuman: %v", err)
+	}
+	return sh
+}
+
+// spawnRoot 以统一路径建"项目 Agent"根（人类 requester → 正常裁决——
+// Part 14.6；旧 Bootstrap 特例已删除）。返回根 ID 与计划的镜像 ns
+// （human 基准 nil = 请求即授权，读写挂载由请求折算）。
+func spawnRoot(t *testing.T, spw *Spawner, task string, writable, readable []string) types.AgentID {
+	t.Helper()
+	dec, err := spw.Adjudicate(context.Background(), &proto.SpawnRequest{
+		RequesterID:     "human:tester",
+		ProfileID:       "coder",
+		TaskDescription: task,
+		WritablePaths:   writable,
+		ReadablePaths:   readable,
+	})
+	if err != nil {
+		t.Fatalf("root Adjudicate: %v", err)
+	}
+	if dec.Status != proto.SpawnApproved {
+		t.Fatalf("root spawn rejected: %+v", dec)
+	}
+	return dec.ChildAgentID
+}
+
+// parentSpawnReq 构造"根 Agent 发起"的 fork 请求（rootID 由统一路径取）。
+func spawnReqFrom(rootID types.AgentID, task string, writable ...string) *proto.SpawnRequest {
+	return &proto.SpawnRequest{
+		RequesterID:     rootID,
+		ProfileID:       "coder",
+		TaskDescription: task,
+		WritablePaths:   writable,
+	}
 }
 
 func newTestSpawner(t *testing.T, mutate func(*Config)) (*Spawner, *fakeFactory, *store.SQLiteStore) {
@@ -123,28 +171,39 @@ func spawnReq(task string, writable ...string) *proto.SpawnRequest {
 	}
 }
 
+// rootNamespace 的镜像（旧 parentNS 的 spawn 请求形态；human 基准 nil =
+// 请求即授权——读挂载来自 ReadablePaths、写挂载来自 WritablePaths）。
+func rootSpawnPaths() (writable, readable []string) {
+	return []string{"src/auth/**", "out/**"}, []string{"src/**"}
+}
+
 // ---------------------------------------------------------------------------
 // 裁决闸
 // ---------------------------------------------------------------------------
 
 func TestAdjudicateApprove(t *testing.T) {
 	spw, factory, _ := newTestSpawner(t, nil)
-	mb := spw.Bootstrap("root", parentNS())
-	_ = mb
+	registerHuman(t, spw)
+	w, r := rootSpawnPaths()
+	rootID := spawnRoot(t, spw, "读 src/auth/oauth.go", w, r)
 
-	dec, err := spw.Adjudicate(context.Background(), spawnReq("读 src/auth/oauth.go", "src/auth/oauth/**"))
+	dec, err := spw.Adjudicate(context.Background(), spawnReqFrom(rootID, "读 src/auth/oauth.go 内文", "src/auth/oauth/**"))
 	if err != nil {
 		t.Fatalf("Adjudicate: %v", err)
 	}
 	if dec.Status != proto.SpawnApproved || dec.ChildAgentID == "" {
 		t.Fatalf("decision: %+v", dec)
 	}
-	// 工厂收到的计划：深度 1、命名空间是子集、注入为空。
-	plan := factory.plans[0]
-	if plan.Depth != 1 || plan.ParentID != "root" {
+	// 工厂收到的计划：深度 2（human d0 → root d1 → child d2）、
+	// 命名空间是根的子集、注入为空。
+	plan := factory.plans[len(factory.plans)-1]
+	if plan.Depth != 2 || plan.ParentID != rootID {
 		t.Fatalf("plan: %+v", plan)
 	}
-	if !plan.Namespace.Subset(parentNS()) {
+	spw.mu.Lock()
+	rootNS := spw.nsOf[rootID]
+	spw.mu.Unlock()
+	if !plan.Namespace.Subset(rootNS) {
 		t.Fatalf("child ns not subset: %+v", plan.Namespace)
 	}
 	// 子的 write 挂载是请求的路径；父的 write 面对子降级为 read。
@@ -174,32 +233,27 @@ func TestAdjudicateRejections(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*Config)
-		req    func() *proto.SpawnRequest
+		req    func(rootID types.AgentID) *proto.SpawnRequest
 		want   proto.SpawnErrorCode
 	}{
-		{"requester not found", nil, func() *proto.SpawnRequest {
-			r := spawnReq("x")
+		{"requester not found", nil, func(rootID types.AgentID) *proto.SpawnRequest {
+			r := spawnReqFrom(rootID, "x")
 			r.RequesterID = "ghost"
 			return r
 		}, proto.SpawnErrRequesterNotFound},
-		{"depth gate (child cannot spawn)", nil, func() *proto.SpawnRequest {
-			r := spawnReq("x")
-			r.RequesterID = "sub" // 由前一个用例登记的子
-			return r
-		}, proto.SpawnErrNotPermitted},
-		{"namespace exceeded", nil, func() *proto.SpawnRequest {
-			return spawnReq("x", "etc/**")
+		{"namespace exceeded", nil, func(rootID types.AgentID) *proto.SpawnRequest {
+			return spawnReqFrom(rootID, "x", "etc/**")
 		}, proto.SpawnErrNamespaceExceeded},
-		{"empty profile", nil, func() *proto.SpawnRequest {
-			r := spawnReq("x", "src/auth/**")
+		{"empty profile", nil, func(rootID types.AgentID) *proto.SpawnRequest {
+			r := spawnReqFrom(rootID, "x", "src/auth/**")
 			r.ProfileID = ""
 			return r
 		}, proto.SpawnErrProfileNotFound},
-		{"fork rounds", func(c *Config) { c.MaxForkRounds = 1 }, func() *proto.SpawnRequest {
-			return spawnReq("x", "src/auth/**")
+		{"fork rounds", func(c *Config) { c.MaxForkRounds = 1 }, func(rootID types.AgentID) *proto.SpawnRequest {
+			return spawnReqFrom(rootID, "x", "src/auth/**")
 		}, proto.SpawnErrForkRounds},
-		{"inject out of range", nil, func() *proto.SpawnRequest {
-			r := spawnReq("x", "src/auth/**")
+		{"inject out of range", nil, func(rootID types.AgentID) *proto.SpawnRequest {
+			r := spawnReqFrom(rootID, "x", "src/auth/**")
 			r.InjectMessages = []int64{99}
 			return r
 		}, proto.SpawnErrInvalidInject},
@@ -207,44 +261,21 @@ func TestAdjudicateRejections(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			spw, _, lg := newTestSpawner(t, tc.mutate)
-			spw.Bootstrap("root", parentNS())
+			registerHuman(t, spw)
+			w, r := rootSpawnPaths()
+			rootID := spawnRoot(t, spw, "root task", w, r)
 			// 预置 requester log（inject 校验的基准）。
-			e := types.NewLogEntry("root", types.RoleUserInput, "seed")
+			e := types.NewLogEntry(rootID, types.RoleUserInput, "seed")
 			if _, err := lg.Append(context.Background(), e); err != nil {
 				t.Fatal(err)
 			}
-			if tc.name == "depth gate (child cannot spawn)" {
-				// 先登记一个子进程（深度 1）。
-				if _, err := spw.Adjudicate(context.Background(), spawnReq("x", "src/auth/**")); err != nil {
-					t.Fatal(err)
-				}
-				var childID types.AgentID
-				spw.mu.Lock()
-				for id := range spw.procs {
-					if id != "root" {
-						childID = id
-					}
-				}
-				spw.mu.Unlock()
-				r := spawnReq("x")
-				r.RequesterID = types.AgentID(childID)
-				r.WritablePaths = []string{"src/auth/**"}
-				dec, err := spw.Adjudicate(context.Background(), r)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if dec.Code != tc.want {
-					t.Fatalf("code = %s, want %s (reason=%s)", dec.Code, tc.want, dec.Reason)
-				}
-				return
-			}
 			if tc.name == "fork rounds" {
 				// 先用掉唯一的轮次。
-				if _, err := spw.Adjudicate(context.Background(), spawnReq("first", "src/auth/**")); err != nil {
+				if _, err := spw.Adjudicate(context.Background(), spawnReqFrom(rootID, "first", "src/auth/**")); err != nil {
 					t.Fatal(err)
 				}
 			}
-			dec, err := spw.Adjudicate(context.Background(), tc.req())
+			dec, err := spw.Adjudicate(context.Background(), tc.req(rootID))
 			if err != nil {
 				t.Fatalf("Adjudicate: %v", err)
 			}
@@ -258,29 +289,56 @@ func TestAdjudicateRejections(t *testing.T) {
 	}
 }
 
-func TestAdjudicateMaxDepth(t *testing.T) {
-	spw, _, _ := newTestSpawner(t, func(c *Config) { c.MaxDepth = 1 })
-	spw.Bootstrap("root", parentNS())
-	// MaxDepth=1：根 fork 子 OK（childDepth=1），子 fork 孙被拒（深度闸 +
-	// 权限闸都会拦，权限闸先触发——depth 1 不可 spawn）。
-	dec, err := spw.Adjudicate(context.Background(), spawnReq("x", "src/auth/**"))
+// TestAdjudicateDepthGate：AI 递归到顶被拒（Part 14.6：max_depth 只约束
+// AI→AI fork）；人类行不受深度闸（走 caps）。
+func TestAdjudicateDepthGate(t *testing.T) {
+	spw, _, _ := newTestSpawner(t, func(c *Config) { c.MaxDepth = 2 }) // human d0 → root d1 → child d2 顶格
+	registerHuman(t, spw)
+	w, r := rootSpawnPaths()
+	rootID := spawnRoot(t, spw, "root", w, r)
+	dec, err := spw.Adjudicate(context.Background(), spawnReqFrom(rootID, "x", "src/auth/**"))
 	if err != nil || dec.Status != proto.SpawnApproved {
-		t.Fatalf("first fork: %+v %v", dec, err)
+		t.Fatalf("first AI fork: %+v %v", dec, err)
+	}
+}
+
+// TestHumanCapsAuthority：人类的 spawn 权威在 CapSet（被收窄的替身人类
+// 被拒——纪律 1 的反例验证：权威不来自"它是人类"这个事实本身）。
+func TestHumanCapsAuthority(t *testing.T) {
+	spw, _, _ := newTestSpawner(t, nil)
+	b := actor.NewChannelBackend(8)
+	narrow, err := actor.NewHuman(actor.HumanID("tester"), b, actor.CapSet{Kind: actor.HumanKind}) // CanSpawn=false
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := spw.RegisterHuman(context.Background(), narrow); err != nil {
+		t.Fatal(err)
+	}
+	dec, aerr := spw.Adjudicate(context.Background(), &proto.SpawnRequest{
+		RequesterID: "human:tester", ProfileID: "coder", TaskDescription: "x",
+	})
+	if aerr != nil {
+		t.Fatal(aerr)
+	}
+	if dec.Status != proto.SpawnRejected || dec.Code != proto.SpawnErrNotPermitted {
+		t.Fatalf("narrowed human: %+v", dec)
 	}
 }
 
 func TestAdjudicateGlobalLimit(t *testing.T) {
-	spw, factory, _ := newTestSpawner(t, func(c *Config) { c.MaxActive = 2 })
-	spw.Bootstrap("root", parentNS())
-	// root + 1 个子 = 2，第二个 fork 被拒。
-	if _, err := spw.Adjudicate(context.Background(), spawnReq("a", "src/auth/**")); err != nil {
+	spw, factory, _ := newTestSpawner(t, func(c *Config) { c.MaxActive = 3 }) // human + root + 1 子
+	registerHuman(t, spw)
+	w, r := rootSpawnPaths()
+	rootID := spawnRoot(t, spw, "root", w, r)
+	// root + 1 个子 = 3，第二个 fork 被拒。
+	if _, err := spw.Adjudicate(context.Background(), spawnReqFrom(rootID, "a", "src/auth/**")); err != nil {
 		t.Fatal(err)
 	}
 	factory.lastRunner().mu.Lock()
 	close(factory.lastRunner().block) // 子结束（未 report → 框架代报）
 	factory.lastRunner().mu.Unlock()
 	time.Sleep(50 * time.Millisecond) // 等代报落袋
-	dec, err := spw.Adjudicate(context.Background(), spawnReq("b", "src/auth/**"))
+	dec, err := spw.Adjudicate(context.Background(), spawnReqFrom(rootID, "b", "src/auth/**"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,10 +352,12 @@ func TestAdjudicateGlobalLimit(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestChildReportDelivery(t *testing.T) {
-	spw, factory, _ := newTestSpawner(t, nil)
-	mb := spw.Bootstrap("root", parentNS())
+	spw, _, _ := newTestSpawner(t, nil)
+	human := registerHuman(t, spw)
+	w, r := rootSpawnPaths()
+	rootID := spawnRoot(t, spw, "root", w, r)
 
-	dec, err := spw.Adjudicate(context.Background(), spawnReq("x", "src/auth/**"))
+	dec, err := spw.Adjudicate(context.Background(), spawnReqFrom(rootID, "x", "src/auth/**"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,12 +369,12 @@ func TestChildReportDelivery(t *testing.T) {
 	}
 	// 父信箱收到信封，From = 子（原则 4：框架填写）。
 	select {
-	case env := <-mb:
+	case env := <-spw.backendOf(t, rootID):
 		if env.Type != proto.MsgChildReport || env.From != childID {
 			t.Fatalf("envelope: %+v", env)
 		}
-		r, ok := env.Payload.(*proto.ChildReport)
-		if !ok || r.Status != proto.ReportSuccess {
+		rp, ok := env.Payload.(*proto.ChildReport)
+		if !ok || rp.Status != proto.ReportSuccess {
 			t.Fatalf("payload: %+v", env.Payload)
 		}
 	case <-time.After(time.Second):
@@ -324,51 +384,104 @@ func TestChildReportDelivery(t *testing.T) {
 	if err := spw.ReportToParent(context.Background(), report); err == nil {
 		t.Fatal("duplicate report must fail")
 	}
-	_ = factory
+	_ = human
+}
+
+// TestChildReportToHuman：项目 Agent（根）的 report 投给人类 Actor——
+// 文件后端把它编码成人类收件箱里的一条（Part 14.5"MsgChildReport 到
+// 人类"；根有父，"无父收 report"的特例消失）。
+func TestChildReportToHuman(t *testing.T) {
+	spw, factory, _ := newTestSpawner(t, nil)
+	human := registerHuman(t, spw)
+	w, r := rootSpawnPaths()
+	rootID := spawnRoot(t, spw, "root", w, r)
+
+	// 根"退出未 report"→ 框架代报 failed → 人类收件箱。
+	factory.lastRunner().mu.Lock()
+	close(factory.lastRunner().block)
+	factory.lastRunner().mu.Unlock()
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("human inbox got no framework report")
+		default:
+		}
+		for _, env := range human.Inbox() {
+			if env.Type != proto.MsgChildReport {
+				continue
+			}
+			rp, ok := env.Payload.(*proto.ChildReport)
+			if !ok || rp.Status != proto.ReportFailed || rp.ChildID != rootID {
+				t.Fatalf("framework report to human: %+v", env.Payload)
+			}
+			if !strings.Contains(rp.Report, "框架代报") {
+				t.Fatalf("framework report text: %q", rp.Report)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func TestFrameworkReportOnSilentExit(t *testing.T) {
 	spw, factory, _ := newTestSpawner(t, nil)
-	mb := spw.Bootstrap("root", parentNS())
+	registerHuman(t, spw)
+	w, r := rootSpawnPaths()
+	rootID := spawnRoot(t, spw, "root", w, r)
 
-	dec, err := spw.Adjudicate(context.Background(), spawnReq("x", "src/auth/**"))
+	dec, err := spw.Adjudicate(context.Background(), spawnReqFrom(rootID, "x", "src/auth/**"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 子未 report 直接退出。
+	// 子未 report 直接退出 → 框架代报进根的信箱。
 	factory.lastRunner().mu.Lock()
 	close(factory.lastRunner().block)
 	factory.lastRunner().mu.Unlock()
 	select {
-	case env := <-mb:
-		r := env.Payload.(*proto.ChildReport)
-		if r.Status != proto.ReportFailed || r.ChildID != dec.ChildAgentID {
-			t.Fatalf("framework report: %+v", r)
+	case env := <-spw.backendOf(t, rootID):
+		rp := env.Payload.(*proto.ChildReport)
+		if rp.Status != proto.ReportFailed || rp.ChildID != dec.ChildAgentID {
+			t.Fatalf("framework report: %+v", rp)
 		}
-		if !strings.Contains(r.Report, "框架代报") {
-			t.Fatalf("framework report text: %q", r.Report)
+		if !strings.Contains(rp.Report, "框架代报") {
+			t.Fatalf("framework report text: %q", rp.Report)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no framework report for silent exit")
 	}
 }
 
+// backendOf 取进程行的后端读端（断言投递形态；同包测试的观察面）。
+func (s *Spawner) backendOf(t *testing.T, id types.AgentID) <-chan proto.Envelope {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.procs[id]
+	if p == nil {
+		t.Fatalf("%s not registered", id)
+	}
+	return p.Backend.Receive()
+}
+
 func TestBuildChildFailureRollsBack(t *testing.T) {
 	spw, factory, _ := newTestSpawner(t, nil)
-	spw.Bootstrap("root", parentNS())
+	registerHuman(t, spw)
+	w, r := rootSpawnPaths()
+	rootID := spawnRoot(t, spw, "root", w, r)
 	factory.mu.Lock()
 	factory.err = errors.New("boom")
 	factory.mu.Unlock()
-	_, err := spw.Adjudicate(context.Background(), spawnReq("x", "src/auth/**"))
+	_, err := spw.Adjudicate(context.Background(), spawnReqFrom(rootID, "x", "src/auth/**"))
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err = %v", err)
 	}
-	// 回滚：进程表无残留、扇出计数还原。
+	// 回滚：进程表无残留（人类 + 根）、扇出计数还原。
 	spw.mu.Lock()
 	n := len(spw.procs)
-	rounds := spw.procs["root"].ForkRounds
+	rounds := spw.procs[rootID].ForkRounds
 	spw.mu.Unlock()
-	if n != 1 || rounds != 0 {
+	if n != 2 || rounds != 0 {
 		t.Fatalf("rollback incomplete: procs=%d rounds=%d", n, rounds)
 	}
 }

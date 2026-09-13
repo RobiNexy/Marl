@@ -40,15 +40,21 @@ func TestIsIntentTool(t *testing.T) {
 	}
 }
 
-// 阶段 11 的错误码协议面（agent.llm_call 的错误码在 proto 侧无常量，
-// 这里测的是工具名常量与 MsgType 的 Valid 面回归）。
+// 阶段 11/12 的错误码协议面（agent.llm_call 的错误码在 proto 侧无常量，
+// 这里测的是工具名常量与 MsgType 的 Valid 面回归——Part 14.5 修订后的
+// 九类型表：新增 MsgDirect / MsgGateRequest / MsgGateReply）。
 func TestMsgTypeValid(t *testing.T) {
 	if MsgUnknown.Valid() {
 		t.Fatal("零值 MsgUnknown 不得 Valid")
 	}
-	for _, m := range []MsgType{MsgTaskAssign, MsgChildReport, MsgHumanInput, MsgEscalation, MsgEscalationReply, MsgReconfigure, MsgShutdown} {
+	for _, m := range []MsgType{MsgTaskAssign, MsgChildReport, MsgDirect, MsgEscalation, MsgEscalationReply,
+		MsgGateRequest, MsgGateReply, MsgReconfigure, MsgShutdown} {
 		if !m.Valid() {
 			t.Fatalf("%v 应 Valid", m)
 		}
+	}
+	// 越界值不得 Valid（跨版本消息 / 内存损坏的第一跳拒绝）。
+	if MsgType(99).Valid() || MsgType(-1).Valid() {
+		t.Fatal("越界 MsgType 不得 Valid")
 	}
 }

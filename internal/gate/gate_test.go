@@ -1,21 +1,25 @@
 package gate
 
-// Gate 的契约测试（Part 11.3）。
+// Gate 的契约测试（Part 11.3 + Part 14.7 的重新定性）。
 //
-// 规则匹配 / 首中生效 / grant 记账 / 审批文件（FileApprover——轮询参数
-// 缩小到毫秒级，契约测"静默窗口 + nonce 凭据"不测具体数值）。
+// 规则匹配 / 首中生效 / grant 记账 / ResolveGate 的裁决兑现。审批文件的
+// 编码与解析（往返、nonce、静默窗）在 actor 包测试——Gate 投递的特例
+// 已消除，Manager 只产出决策与兑现 grant（"审批者必须是规则不是 Actor"）。
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
-	"time"
+
+	"marl/internal/proto"
 )
 
 func ruleOf(id string, kind Kind, action Action) Rule {
 	return Rule{ID: id, Match: map[string]string{"kind": string(kind)}, Action: action}
+}
+
+// gateReplyOf 构造 GateReply 载荷（allow/deny 两面的测试形态）。
+func gateReplyOf(action, mode string, count int, tokens int64, reason string) *proto.GateReply {
+	return &proto.GateReply{Action: action, GrantMode: mode, Count: count, Tokens: tokens, Reason: reason}
 }
 
 // TestRuleMatch：字符串/布尔/数值前缀比较（"<10" / ">=20"）。
@@ -42,8 +46,8 @@ func TestRuleMatch(t *testing.T) {
 	}
 }
 
-// TestEvaluateFirstMatch：顺序匹配、首中生效 + 默认拒绝。
-func TestEvaluateFirstMatch(t *testing.T) {
+// TestDecideFirstMatch：顺序匹配、首中生效 + 默认拒绝。
+func TestDecideFirstMatch(t *testing.T) {
 	m, err := NewManager(ManagerConfig{Rules: []Rule{
 		ruleOf("deny-big", KindOrchestration, ActionDeny),
 		ruleOf("allow-rest", KindOrchestration, ActionAllow),
@@ -51,139 +55,134 @@ func TestEvaluateFirstMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := m.Evaluate(context.Background(), &Request{Kind: KindOrchestration, AgentID: "a1"})
+	d := m.Decide(context.Background(), &Request{Kind: KindOrchestration, AgentID: "a1"})
 	if d.RuleID != "deny-big" {
 		t.Fatalf("first hit: %+v", d)
 	}
 	// 未命中 → 默认拒绝（漏配兜底规则不会静默放行）。
-	d2 := m.Evaluate(context.Background(), &Request{Kind: KindLLMCall, AgentID: "a1"})
+	d2 := m.Decide(context.Background(), &Request{Kind: KindLLMCall, AgentID: "a1"})
 	if d2.Action != ActionDeny || d2.RuleID != "default-deny" {
 		t.Fatalf("default-deny: %+v", d2)
 	}
 }
 
-// TestGrantCount：审批的 grant（count）在额度内不再打扰人类。
-func TestGrantCount(t *testing.T) {
-	asks := 0
-	impl := &fnApp{fn: func(req *Request, rule Rule) (*Decision, Grant, error) {
-		asks++
-		return &Decision{Action: ActionAllow, Reason: "granted"}, Grant{Mode: GrantCount, Count: 2}, nil
-	}}
-	m, err := NewManager(ManagerConfig{
-		Rules:    []Rule{{ID: "review-all", Match: map[string]string{"kind": "llm_call"}, Action: ActionNeedHuman}},
-		Approver: impl,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	// 第一次：问人（asks=1）+ 记 count=2 的 grant。
-	m.Evaluate(ctx, &Request{Kind: KindLLMCall, AgentID: "a1", Attributes: map[string]any{"task_call_count": 0.0}})
-	// 第二次：额度内直行（asks 不变）。
-	for i := 0; i < 2; i++ {
-		d2 := m.Evaluate(ctx, &Request{Kind: KindLLMCall, AgentID: "a1", Attributes: map[string]any{"task_call_count": 1.0}})
-		if d2.RuleID != "approver" || d2.Action != ActionAllow {
-			t.Fatalf("grant path: %+v", d2)
-		}
-	}
-	// 额度上：再问人（asks=2）。
-	m.Evaluate(ctx, &Request{Kind: KindLLMCall, AgentID: "a1", Attributes: map[string]any{"task_call_count": 9.0}})
-	if asks != 2 {
-		t.Fatalf("approver asks = %d, want 2（额度内不再打扰）", asks)
-	}
-}
-
-// fnApp 是 Approver 的函数形态替身。
-type fnApp struct {
-	fn func(*Request, Rule) (*Decision, Grant, error)
-}
-
-func (f *fnApp) Ask(ctx context.Context, req *Request, rule Rule) (*Decision, Grant, error) {
-	return f.fn(req, rule)
-}
-
-// TestNeedHumanWithoutApproverDenies：无 Approver 时 need_human 兑现为
-// 显式拒绝（"没有人类可问"不能变成永久挂起）。
-func TestNeedHumanWithoutApproverDenies(t *testing.T) {
+// TestNeedHumanDecision：need_human 是**决策**不是阻塞——PEP 产出后
+// 由调用方折算成 MsgGateRequest（Part 14.7 的"审批者必须是规则"）。
+func TestNeedHumanDecision(t *testing.T) {
 	m, _ := NewManager(ManagerConfig{Rules: []Rule{{
 		ID:     "review",
 		Match:  map[string]string{"kind": "llm_call"},
 		Action: ActionNeedHuman,
 		Reason: "基本盘组的门槛",
 	}}})
-	d := m.Evaluate(context.Background(), &Request{Kind: KindLLMCall, AgentID: "a"})
-	if d.Action != ActionDeny {
-		t.Fatalf("explicit deny: %+v", d)
+	d := m.Decide(context.Background(), &Request{Kind: KindLLMCall, AgentID: "a"})
+	if d.Action != ActionNeedHuman || d.RuleID != "review" {
+		t.Fatalf("need_human decision: %+v", d)
 	}
 }
 
-// TestNeedHumanWithoutApproverDenies 的基线确认：Audit nil 也不会崩溃。
-func TestGateNoAuditOK(t *testing.T) {
-	m, _ := NewManager(ManagerConfig{Rules: []Rule{
-		ruleOf("allow", KindLLMCall, ActionAllow),
-	}})
-	d := m.Evaluate(context.Background(), &Request{Kind: KindLLMCall, AgentID: "z", Attributes: map[string]any{}})
-	if d.Action != ActionAllow {
-		t.Fatalf("no-attr allow: %+v", d)
-	}
-}
-
-// TestFileApproverGrantNext：人类在审批文件写 @grant next 2 → Ask 返回
-// count 型 grant 与 allow（Part 11.3 §3.3 的 grant 形态全走过这里）。
-func TestFileApproverGrantNext(t *testing.T) {
-	root := t.TempDir()
-	fa, err := NewFileApprover(root, 10*time.Millisecond, 40*time.Millisecond)
+// TestResolveGateGrantCount：人类的 count 型裁决记账后，额度内直行
+// （不再产生 need_human）；额度耗尽回到 need_human。
+func TestResolveGateGrantCount(t *testing.T) {
+	m, err := NewManager(ManagerConfig{Rules: []Rule{{
+		ID: "review-all", Match: map[string]string{"kind": "llm_call"}, Action: ActionNeedHuman,
+	}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := &Request{Kind: KindLLMCall, AgentID: "a1",
-		Attributes: map[string]any{"task_call_count": 21, "task_tokens": 9000.0}}
-	r := Rule{ID: "review-llm-overage", Match: map[string]string{"kind": "llm_call", "task_call_count": ">=20"}, Action: ActionNeedHuman}
-	type res struct {
-		dec *Decision
-		g   Grant
+	ctx := context.Background()
+	req := &Request{Kind: KindLLMCall, AgentID: "a1", Attributes: map[string]any{"task_call_count": 0.0}}
+	if d := m.Decide(ctx, req); d.Action != ActionNeedHuman {
+		t.Fatalf("pre-grant: %+v", d)
 	}
-	resCh := make(chan res, 1)
-	go func() {
-		dec, g, err := fa.Ask(context.Background(), req, r)
-		if err != nil {
-			t.Errorf("ask: %v", err)
-			resCh <- res{}
-			return
+	// 人类批 "接下来 2 次" → ResolveGate 兑现。
+	dec, rerr := m.ResolveGate(ctx, req, gateReplyOf("allow", "count", 2, 0, ""), "human:u1000")
+	if rerr != nil || dec.Action != ActionAllow {
+		t.Fatalf("resolve: %v %+v", rerr, dec)
+	}
+	// 两次额度内直行（need_human 不再出现）。
+	for i := 0; i < 2; i++ {
+		d2 := m.Decide(ctx, req)
+		if d2.Action != ActionAllow || d2.RuleID != "approver" {
+			t.Fatalf("grant path %d: %+v", i, d2)
 		}
-		resCh <- res{dec, g}
-	}()
-	// 等审批文件出现（Ask 写入）→ 人类编辑（写裁决行）。
-	budget := 3 * time.Second
-	has := false
-	var md string
-	for start := time.Now(); time.Since(start) < budget; {
-		entries, _ := os.ReadDir(filepath.Join(root, "approvals"))
-		if len(entries) > 0 {
-			md = filepath.Join(root, "approvals", entries[0].Name())
-			has = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
-	if !has {
-		t.Fatal("approval file not created")
+	// 额度上：回到 need_human（"不再打扰"的边界要闭环）。
+	if d3 := m.Decide(ctx, req); d3.Action != ActionNeedHuman {
+		t.Fatalf("over-grant: %+v", d3)
 	}
-	// 把裁决写成 @grant next 2（frontmatter/nonce 不动）。
-	body, _ := os.ReadFile(md)
-	edited := strings.Replace(string(body), "@grant once", "@grant next 2", 1)
-	if err := os.WriteFile(md, []byte(edited), 0o644); err != nil {
+}
+
+// TestResolveGateAlwaysPersisted + GrantStore：永久放行 → 动态 allow 规则
+// 插顶 + grants/ 落盘；重启（新 Manager + LoadGrants 回插）后仍然直行。
+func TestResolveGateAlwaysPersisted(t *testing.T) {
+	ctx := context.Background()
+	controlRoot := t.TempDir()
+	gs, err := NewGrantStore(controlRoot)
+	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case got := <-resCh:
-		if got.dec == nil || got.dec.Action != ActionAllow {
-			t.Fatalf("decision: %+v", got.dec)
+	rules := []Rule{{ID: "review-all", Match: map[string]string{"kind": "llm_call"}, Action: ActionNeedHuman}}
+	m, err := NewManager(ManagerConfig{Rules: rules, Grants: gs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := &Request{Kind: KindLLMCall, AgentID: "a1", Attributes: map[string]any{}}
+	dec, rerr := m.ResolveGate(ctx, req, gateReplyOf("allow", "always", 0, 0, ""), "human:u1000")
+	if rerr != nil || dec.Action != ActionAllow {
+		t.Fatalf("resolve: %v %+v", rerr, dec)
+	}
+	if d := m.Decide(ctx, req); d.Action != ActionAllow {
+		t.Fatalf("always in-process: %+v", d)
+	}
+	// 重启形态：新 Manager，LoadGrants 回插动态规则。
+	saved, lerr := gs.LoadGrants(ctx)
+	if lerr != nil || len(saved) != 1 {
+		t.Fatalf("load grants: %v %d", lerr, len(saved))
+	}
+	if saved[0].GrantedBy != "human:u1000" {
+		t.Fatalf("granted_by 链断裂: %+v", saved[0])
+	}
+	if saved[0].Rule.Match["kind"] != string(KindLLMCall) || saved[0].Rule.Action != ActionAllow {
+		t.Fatalf("persisted rule shape: %+v", saved[0].Rule)
+	}
+	m2, err := NewManager(ManagerConfig{Rules: rules, Grants: gs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range saved {
+		if err := m2.AddGrant(ctx, req, Grant{Mode: GrantAlways, Reason: g.Rule.Reason}, g.GrantedBy); err != nil {
+			t.Fatal(err)
 		}
-		if got.g.Mode != GrantCount || got.g.Count != 2 {
-			t.Fatalf("grant: %+v", got.g)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("ask did not resolve")
+	}
+	if d := m2.Decide(ctx, req); d.Action != ActionAllow {
+		t.Fatalf("always after restart: %+v", d)
+	}
+}
+
+// TestResolveGateDeny：deny 的兑现（原因透传，不记账）。
+func TestResolveGateDeny(t *testing.T) {
+	m, _ := NewManager(ManagerConfig{Rules: []Rule{
+		ruleOf("review", KindLLMCall, ActionNeedHuman),
+	}})
+	req := &Request{Kind: KindLLMCall, AgentID: "a", Attributes: map[string]any{}}
+	dec, err := m.ResolveGate(context.Background(), req,
+		gateReplyOf("deny", "", 0, 0, "别烧钱了"), "human:u1")
+	if err != nil || dec.Action != ActionDeny || dec.Reason != "别烧钱了" {
+		t.Fatalf("deny resolve: %v %+v", err, dec)
+	}
+	// deny 不记账：再问还是 need_human。
+	if d := m.Decide(context.Background(), req); d.Action != ActionNeedHuman {
+		t.Fatalf("deny must not record grant: %+v", d)
+	}
+}
+
+// TestResolveGateUnknownAction：未知 action 显式报错（协议 bug 可见）。
+func TestResolveGateUnknownAction(t *testing.T) {
+	m, _ := NewManager(ManagerConfig{Rules: []Rule{ruleOf("r", KindLLMCall, ActionNeedHuman)}})
+	if _, err := m.ResolveGate(context.Background(),
+		&Request{Kind: KindLLMCall, AgentID: "a", Attributes: map[string]any{}},
+		gateReplyOf("maybe", "", 0, 0, ""), ""); err == nil {
+		t.Fatal("unknown action must error")
 	}
 }

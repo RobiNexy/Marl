@@ -6,7 +6,7 @@ import (
 	"marl/internal/types"
 )
 
-// MsgType 是 Mailbox 消息类型（Part 8.7）。新模型下消息类型比旧设计少得多。
+// MsgType 是 Mailbox 消息类型（Part 8.7；Part 14.5 的统一修订）。
 //
 // 零值契约：MsgUnknown = 0 是**刻意的哨兵**。这是对设计文档的修正——文档
 // Part 8.7 直接从 MsgTaskAssign 开始 iota，也就是让零值等于"分配任务"。
@@ -21,15 +21,22 @@ import (
 // 不存在兼容性问题。
 //
 // [偏离文档: 已在 decisions.md 记录为对 Part 8.7 的缺陷修正。]
+//
+// Part 14（阶段 12）修订：MsgHumanInput（marl say 的专用注入）由 MsgDirect
+// 收编（人类发给任意 Actor 的直接消息——旧机制的合并，见 Part 14.12 改动
+// 清单 #5）；新增 MsgGateRequest / MsgGateReply（Gate 的审批往返，投递走
+// 人类 Actor 的文件后端）。类型码未持久化为数值，重排无兼容负担。
 type MsgType int
 
 const (
 	MsgUnknown         MsgType = iota // 哨兵：零值 = "类型未设置/不识别"，必须拒绝处理
-	MsgTaskAssign                     // 分配任务（来自父或人类）
-	MsgChildReport                    // 子的 report（含框架代报的 failed）
-	MsgHumanInput                     // 人类插话（marl say）
+	MsgTaskAssign                     // 分配任务（任何 Actor → Agent；人类经 marl start）
+	MsgChildReport                    // 子的 report（含框架代报的 failed；可投递到人类）
+	MsgDirect                         // 直接消息（任何 → 任何；marl say、Agent 间显式通信）
 	MsgEscalation                     // 下级上浮的求助
 	MsgEscalationReply                // 上级的答复
+	MsgGateRequest                    // PEP → 人类 Actor：审批请求（Part 14.7）
+	MsgGateReply                      // 人类 Actor → Agent：裁决 + grant
 	MsgReconfigure                    // 参数调整（人类或框架）
 	MsgShutdown                       // 优雅关闭
 )
@@ -41,8 +48,8 @@ const (
 // 并发：纯函数。
 func (t MsgType) Valid() bool {
 	switch t {
-	case MsgTaskAssign, MsgChildReport, MsgHumanInput, MsgEscalation,
-		MsgEscalationReply, MsgReconfigure, MsgShutdown:
+	case MsgTaskAssign, MsgChildReport, MsgDirect, MsgEscalation,
+		MsgEscalationReply, MsgGateRequest, MsgGateReply, MsgReconfigure, MsgShutdown:
 		return true
 	}
 	return false
@@ -59,12 +66,16 @@ func (t MsgType) String() string {
 		return "task_assign"
 	case MsgChildReport:
 		return "child_report"
-	case MsgHumanInput:
-		return "human_input"
+	case MsgDirect:
+		return "direct"
 	case MsgEscalation:
 		return "escalation"
 	case MsgEscalationReply:
 		return "escalation_reply"
+	case MsgGateRequest:
+		return "gate_request"
+	case MsgGateReply:
+		return "gate_reply"
 	case MsgReconfigure:
 		return "reconfigure"
 	case MsgShutdown:

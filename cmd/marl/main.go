@@ -6,6 +6,8 @@
 //	marl init [dir]          # 全自动初始化（阶段 6）
 //	marl knowledge lint      # preferences/ 编译产物超限检查（阶段 7）
 //	marl status              # Agent 树 / 阻塞状态 / 讨论等待（阶段 8）
+//	marl start "任务"        # 人类 spawn 项目 Agent（Part 14.6，阶段 12）
+//	marl say "文本"          # 人类 → Actor 的 MsgDirect（Part 14.5）
 //
 // 无参数 = init（阶段 6 的唯一入口；保持向后兼容的裸调用习惯）。
 package main
@@ -36,8 +38,12 @@ func main() {
 		err = cmdLog(args)
 	case "attach":
 		err = cmdAttach(args)
+	case "start":
+		err = cmdStart(args)
+	case "say":
+		err = cmdSay(args)
 	default:
-		err = fmt.Errorf("unknown command %q (want: init | knowledge | status | log | attach)", cmd)
+		err = fmt.Errorf("unknown command %q (want: init | knowledge | status | log | attach | start | say)", cmd)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "marl %s: %v\n", cmd, err)

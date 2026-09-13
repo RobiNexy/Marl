@@ -29,6 +29,11 @@ type ProcessSnapshot struct {
 	Depth     int
 	State     types.AgentState
 	StartedAt time.Time
+	// 统一 Actor 面（Part 14.8）：挂起分支（等待人类的分支——讨论
+	// / Gate 审批；escalation 无超时不登记）。PendingKind 非空时
+	// PendingAt 是停摆的起点。
+	PendingKind string
+	PendingAt   time.Time
 }
 
 // LogSource 是"该子有没有新产出"的观察面（判据的两条数据源：Log 追加
@@ -61,6 +66,11 @@ type Config struct {
 	MaxChildTokens int64
 	// MaxChildSeconds：单个子任务的最长耗时（StartedAt 起）。<= 0 = 关闭。
 	MaxChildSeconds int64
+	// PendingOverrun 是"等待人类"分支的停摆告警阈值（Part 14.8：默认
+	// 语义 24h——讨论 / Gate 审批的等待有界，escalation 无超时不登记；
+	// 告警是升级提示不是终止——"让它自己跑花的是我的钱"，卡死的任务
+	// 不烧钱、可观测、由人类决定去留）。<= 0 = 关闭。
+	PendingOverrun time.Duration
 }
 
 // Watchdog 是框架级的独立监控 goroutine。
@@ -91,9 +101,9 @@ func New(cfg Config) (*Watchdog, error) {
 	case cfg.Interval <= 0:
 		return nil, fmt.Errorf("watchdog: Interval must be positive")
 	}
-	// 三项判据全关的 Watchdog 无意义（= 空转烧 CPU），显式拒绝。
-	if cfg.NoProgressAfter <= 0 && cfg.MaxChildTokens <= 0 && cfg.MaxChildSeconds <= 0 {
-		return nil, fmt.Errorf("watchdog: no detection enabled (set NoProgressAfter/MaxChildTokens/MaxChildSeconds)")
+	// 全部判据关闭的 Watchdog 无意义（= 空转烧 CPU），显式拒绝。
+	if cfg.NoProgressAfter <= 0 && cfg.MaxChildTokens <= 0 && cfg.MaxChildSeconds <= 0 && cfg.PendingOverrun <= 0 {
+		return nil, fmt.Errorf("watchdog: no detection enabled (set NoProgressAfter/MaxChildTokens/MaxChildSeconds/PendingOverrun)")
 	}
 	return &Watchdog{
 		cfg:   cfg,
@@ -140,6 +150,18 @@ func (w *Watchdog) run(ctx context.Context) {
 func (w *Watchdog) scan(ctx context.Context) {
 	now := time.Now()
 	for _, p := range w.cfg.Table.Snapshot() {
+		// 挂起分支的停摆告警（Part 14.8）：等待人类的讨论 / Gate 审批
+		// 超过阈值 → 升级告警（审计可见）。不终止——等待不烧钱，卡死
+		// 是确认过的回退策略；Watchdog 的义务是让停摆"可见 + 有时长"。
+		if p.PendingKind != "" && w.cfg.PendingOverrun > 0 && !p.PendingAt.IsZero() {
+			if stalled := now.Sub(p.PendingAt); stalled > w.cfg.PendingOverrun {
+				w.audit(ctx, "watchdog_pending_overrun", string(p.ID), map[string]any{
+					"pending_kind":    p.PendingKind,
+					"stalled_seconds": int64(stalled.Seconds()),
+					"threshold":       w.cfg.PendingOverrun.String(),
+				})
+			}
+		}
 		if p.State != types.StateRunning {
 			// 只有 Run 中的活跃子适用两项判据（blocked 的停摆是 status
 			// 的展示项不是 Watchdog 的执行面；crashed/idle 已退出）。
@@ -241,6 +263,7 @@ func (a tableAdapter) Snapshot() []ProcessSnapshot {
 		out = append(out, ProcessSnapshot{
 			ID: p.ID, ParentID: p.ParentID, Depth: p.Depth,
 			State: p.State, StartedAt: p.StartedAt,
+			PendingKind: p.PendingKind, PendingAt: p.PendingAt,
 		})
 	}
 	return out

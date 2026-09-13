@@ -8,7 +8,7 @@
 - **能力约束代替提示词惩罚**：越权路径在技能层硬拦截，深度到顶在 Spawner 硬拒绝——不赌 LLM 自觉；
 - **权限来自通道**：人类的审批走文件路径 + 写权限校验（verdict/审批文件 Agent 物理不可写），绝不从消息内容里解析授权。
 
-功能面一览：阶梯经济（r0→r2 证据自动升级）、成本账本全程可见、上下文压缩闭环（SUM 七章 + ≥20% 收益判据）、Fossil 单写者提交（子 Agent 只写文件不碰 VCS）、人机三类文件信箱（讨论 / Escalation / Gate 审批）、知识库（常驻块 / 契约 / vendor 同步）、三层 fork 拓扑 + Watchdog。
+功能面一览：**统一 Actor 模型（人类进进程表，监督树以人类为根——Part 14）**、阶梯经济（r0→r2 证据自动升级）、成本账本全程可见、上下文压缩闭环（SUM 七章 + ≥20% 收益判据）、Fossil 单写者提交（子 Agent 只写文件不碰 VCS）、人机三类文件信箱（讨论 / Escalation / Gate 审批）+ grants/ 落盘、知识库（常驻块 / 契约 / vendor 同步）、三层 fork 拓扑 + Watchdog（含"等待人类"分支的停摆告警）。
 
 ## 1. 安装与使用
 
@@ -66,33 +66,42 @@ export DEEPSEEK_API_KEY=sk-...
 
 只有一个密钥环境变量；所有命令都支持 `-api-key-env` / `-key-env` 换名读取。
 
-### 1.5 跑第一个任务（`cmd/mini` 是完整主循环工具）
+### 1.5 跑第一个任务（统一 Actor 面：人类 spawn 项目 Agent）
 
 ```bash
 cd my-marl-project
 
-# ① 最小闭环真跑：list_dir → file_read → 总结（真 DeepSeek，一次几分钱）
+# ① 统一面的完整形态：人类 Actor（监督树的根）spawn 项目 Agent——
+#    经正常 Spawner 裁决创建，完成后 report 落进人类收件箱
+DEEPSEEK_API_KEY=sk-... go run ./cmd/marl start -dir . "读 README.md，用一句话总结这个项目"
+go run ./cmd/marl status -db .marl/store.db      # 👤 human:<uid> 是树的根
+
+# ② 人类 → Actor 的直接消息（运行中的 start 在下一轮编排看到）
+go run ./cmd/marl say -dir . "补充：总结用中文。"
+
+# ③ 最小闭环真跑（主循环工具；list_dir → file_read → 总结）
 go run <marl仓库路径>/cmd/mini -task readme -db .marl/store.db
 
-# ② 离线回放（不联网、不花钱）：脚本化假 LLM 验证闭环骨架
+# ④ 离线回放（不联网、不花钱）：脚本化假 LLM 验证闭环骨架
 go run <marl仓库路径>/cmd/mini -task readme -dry-run
 
-# ③ 压缩演示：读 10 个文件把上下文撑大 → 压缩闭环触发（收益 ≥20%）
+# ⑤ 压缩演示：读 10 个文件把上下文撑大 → 压缩闭环触发（收益 ≥20%）
 go run <marl仓库路径>/cmd/mini -task files -files 10 -ctx-budget 4500 \
     -ladder <marl仓库路径>/ladder-mini.yaml -db .marl/store.db
 
-# ④ 阶梯升级演示（dry-run 专用）：tool_call 连续格式错误 → 证据评分 → 自动升到 r1
+# ⑥ 阶梯升级演示（dry-run 专用）：tool_call 连续格式错误 → 证据评分 → 自动升到 r1
 go run <marl仓库路径>/cmd/mini -task failing -dry-run -ladder <marl仓库路径>/ladder-mini.yaml
 ```
 
 `-task` 是任务**类型**（`readme` | `files` | `failing`），不是自由文本——mini 是主循环的
-交付检查工具，真实任务由你的装配代码给 `agent.Config` 传入。
-（`readme` 任务读当前目录的 README.md；新项目先放一个再跑。）
+交付检查工具；`marl start` 是统一 Actor 面的真实任务入口（自由文本）。
+人类收件箱在控制面（`~/.local/state/marl/<项目名>/inbox/`）：Gate 审批、
+项目 Agent 的 report、`marl say` 的直接消息都在这里。
 
 ### 1.6 观测面
 
 ```bash
-# Agent 树 + 阻塞状态 + 讨论等待（从 audit_events 还原，只读）
+# 监督树（人类为根）+ 阻塞状态 + 讨论等待（从 audit_events 还原，只读）
 go run ./cmd/marl status -db .marl/store.db -color always
 
 # 对话导出 / tail
@@ -101,7 +110,7 @@ go run ./cmd/marl log -db .marl/store.db -out conversation.md # 导出 Markdown
 go run ./cmd/marl attach -db .marl/store.db                   # 2s 轮询 tail，Ctrl-C 退出
 
 # 阶梯成本报表（按 rung / call_type 分项，附换模型记录）
-go run ./cmd/ladder_report -db .marl/store.db -task mini-task
+go run ./cmd/ladder_report -db .marl/store.db -task start-task
 ```
 
 ### 1.7 交付检查命令（阶段验收骨架，全部可重放）
@@ -145,15 +154,18 @@ go run $MARL_REPO/cmd/marl knowledge lint -dir .
 ### 步骤 2 · 主循环真跑（tool_call 闭环 + Log 落库）
 
 ```bash
-go run $MARL_REPO/cmd/mini -task readme -db .marl/store.db
+# 统一 Actor 面的真实入口：人类 Actor spawn 项目 Agent（AI 第 1 层），
+# 完成后 report 落人类收件箱；账本记 call_type=main 的分项。
+go run $MARL_REPO/cmd/marl start -dir . "读 README.md，用一句话总结这个项目"
 ```
 
-发生的事：装配 SQLite 存储 → 注册技能（list_dir / file_read / file_write，
-路径全部经命名空间 Resolver 沙箱校验）→ Agent 主循环
-`LLM → tool_call → 技能执行 → tool_result → LLM` → 打印 Log 全链条。
-可验证落库：
+发生的事：人类 Actor（`human:<uid>`，caps 全量）登记为监督树根 → 项目
+Agent 经**正常 Spawner 裁决**创建（requester = 人类——旧 bootstrap 特例
+已删除）→ 主循环 `LLM → tool_call → 技能执行 → tool_result → LLM` →
+report 投给人类收件箱。可验证落库与树：
 
 ```bash
+go run $MARL_REPO/cmd/marl status -db .marl/store.db   # 👤 human:<uid> 为根
 sqlite3 .marl/store.db "SELECT seq, role, substr(content,1,80) FROM log_entries LIMIT 10;"
 ```
 
@@ -236,15 +248,19 @@ go run $MARL_REPO/cmd/marl models probe -models deepseek-flash,deepseek-v4-pro
 
 以下能力在引擎层完整可运行（下表右列是对应回归测试，全部在
 `go test ./... -race` 的通过范围内），但 `cmd/mini` 的装配未包含它们——
-按 §3 配置后在你的装配代码里传入对应 `agent.Config` 字段即启用：
+按 §3 配置后在你的装配代码里传入对应 `agent.Config` 字段即启用
+（`cmd/marl start` 是含 llm_call + Gate + grants 的完整装配示例）：
 
 | 能力 | 用法 | 证明测试 |
 | :-- | :-- | :-- |
 | llm_call sidecar | Agent 的受控副调用：无工具、不占深度、同缓存桶、进 Gate | `TestLLMCallHappy` `TestLLMCallInputTooLarge` `TestLLMCallWireNotFound` `TestLLMCallModelNotInCatalog` |
-| Gate 审批 | 超限/高破坏操作 → 审批文件（`@grant next 5` 形态）→ 恢复 | `TestGatePendingGrant` `TestFileApproverGrantNext` `TestGrantCount` |
+| Gate 审批（信封化） | need_human → MsgGateRequest → 人类收件箱 → MsgGateReply → grant 兑现 | `TestLLMCallGatePendingGrant` `TestScriptedHumanGateApproval` |
+| grant 生命周期 | once/count/tokens 进 session；always 插动态规则 + grants/ 落盘（重启回插） | `TestResolveGateAlwaysPersisted` `TestScriptedHumanGrantAlways` |
 | View 编排五件套 | exclude / restore / reorder / annotate / pin（pin 零破坏） | `internal/orchestrate` 全套 |
 | 缓存破坏分级 | 低破坏直行；头部排除致大半上下文报废 → need_human | `internal/orchestrate` + gate |
-| Escalation | 有父走父信箱；无父落 `~/.local/state/marl/<project>/requests/` 文件信箱 | `TestManagerRoutesToParent` `TestManagerHumanPath` `TestWrongNonceIgnored` |
+| Escalation | 有父走父信箱；无父（根）→ 人类收件箱——链条终止在拓扑顶端 | `TestManagerRoutesToParent` `TestScriptedHumanEscalation` |
+| 人类为根的监督树 | RegisterHuman（depth=0，caps 全量）+ 项目 Agent 经正常裁决 | `TestScriptedHuman*` 四场景 + `TestAdjudicateApprove` |
+| 挂起停摆告警 | Watchdog 扫描 discussing / awaiting_gate 分支（24h 阈值告警不终止） | `TestPendingOverrunAlerts` |
 | 换模型热重配 | `ReconfigureRequest` 经 Mailbox 能力校验 | `internal/agent/reconfigure_test.go` |
 
 ## 3. 配置与修改
@@ -446,14 +462,16 @@ Finalize 写入（author=human）。
 
 ## 5. 文档与测试地图
 
-- `docs/design/marl_design.md`：设计正文（Part 0–13）；
-- `docs/design/decisions.md`：ADR-0001..0031（每条附实测依据）；
+- `docs/design/marl_design.md`：设计正文（Part 0–13 + Part 14 统一 Actor 模型实现记录）；
+- `docs/design/decisions.md`：ADR-0001..0032（每条附实测依据）；
 - `docs/test_report/phaseN-test-report.md`：各阶段真机测试记录；
 - `docs/examples.md`：命令速查；
 - `docs/deepseek-api/`：厂商文档快照（ADR 引用的证据基底）。
 
 测试纪律：`go test ./... -race` 默认通过条件；golden 测试守护工具表与
-SUM 的字节稳定；并发包（store / discuss / watchdog）有专门的并发与
+SUM 的字节稳定；统一 Actor 面的验收是 ScriptedHuman 四场景（讨论/审批/
+escalation/grant——`internal/agent/unify_int_test.go`，不依赖真人、UI、
+文件静默期）；并发包（store / discuss / watchdog）有专门的并发与
 nonce 误配测试。
 
 ---

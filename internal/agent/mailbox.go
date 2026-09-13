@@ -60,11 +60,14 @@ func (a *Agent) startPump(ctx context.Context) {
 	}()
 }
 
-// handleEnvelope 处理一条信封（Part 8.8 handle 的阶段 5 形态）。
+// handleEnvelope 处理一条信封（Part 8.8 handle + Part 14 的统一消息面）。
 //
-// 阶段 5 只处理 MsgChildReport；其余类型记审计并丢弃（Mailbox 的完整
-// 消息面——人类输入/升级/重配置——随对应阶段落地；静默丢弃必须留下
-// 审计痕迹，否则"发了但没人处理"不可归因）。
+// 处理面：MsgChildReport（父的等待解除）、MsgEscalation（父侧登记+ACK）、
+// MsgEscalationReply（发起者恢复）、MsgDirect（人类/Actor 直接消息的
+// 异步注入——下一轮编排自然看到，Part 14.5）、MsgGateReply（Gate 审批
+// 回执的对账与送达）。其余类型记审计并丢弃（Mailbox 的完整消息面随
+// 对应阶段落地；静默丢弃必须留下审计痕迹，否则"发了但没人处理"
+// 不可归因）。
 func (a *Agent) handleEnvelope(env proto.Envelope) {
 	switch env.Type {
 	case proto.MsgChildReport:
@@ -100,11 +103,62 @@ func (a *Agent) handleEnvelope(env proto.Envelope) {
 		if a.escCfg != nil && a.escCfg.Manager != nil {
 			a.escCfg.Manager.DeliverReply(reply)
 		}
+	case proto.MsgDirect:
+		// 人类/Actor 直接消息（marl say；Part 14.5）：异步注入——落成
+		// RoleHumanNote 的 Log 条目，下一轮编排自然看到。不唤醒、不等待
+		//（Part 14.8 违约表的"无等待"行）。
+		msg, ok := env.Payload.(*proto.DirectMessage)
+		if !ok || msg == nil {
+			a.auditf(context.Background(), "mailbox_error", env.Type.String(), map[string]any{
+				"error": "direct payload mismatch", "from": string(env.From),
+			})
+			return
+		}
+		a.handleDirect(context.Background(), env.From, msg)
+	case proto.MsgGateReply:
+		// Gate 审批回执（Part 14.7）：对账（requestID/nonce）通过则送达
+		// 挂起的 awaitGate；错配回执显式拒绝（可见的陈旧回放防线）。
+		reply, ok := env.Payload.(*proto.GateReply)
+		if !ok || reply == nil {
+			a.auditf(context.Background(), "mailbox_error", env.Type.String(), map[string]any{
+				"error": "gate reply payload mismatch", "from": string(env.From),
+			})
+			return
+		}
+		a.deliverGateReply(reply, env.From)
+	case proto.MsgTaskAssign:
+		// 任务分配信封（Part 14.5；人类经 marl start / 未来 daemon）。
+		// 当前装配的任务载体是 SpawnRequest.TaskDescription（Part 8.3 的
+		// 不可变输入）；本处理面让协议表的类型可投递——落成 user 消息，
+		// 下一轮编排自然看到。
+		msg, ok := env.Payload.(*proto.DirectMessage)
+		if !ok || msg == nil || msg.Text == "" {
+			a.auditf(context.Background(), "mailbox_error", env.Type.String(), map[string]any{
+				"error": "task_assign payload mismatch", "from": string(env.From),
+			})
+			return
+		}
+		a.handleDirect(context.Background(), env.From, msg)
 	default:
 		a.auditf(context.Background(), "mailbox_unhandled", env.Type.String(), map[string]any{
 			"from": string(env.From),
 		})
 	}
+}
+
+// handleDirect 把一条直接消息落成 Log+View（RoleHumanNote）+ 审计。
+// From 是框架填写的 ActorID（人类 "human:<uid>" 或上游 Agent）。
+func (a *Agent) handleDirect(ctx context.Context, from types.AgentID, msg *proto.DirectMessage) {
+	e := types.NewLogEntry(a.id, types.RoleHumanNote, msg.Text)
+	e.Meta = map[string]any{"direct_from": string(from)}
+	if _, err := a.log.Append(ctx, e); err != nil {
+		a.auditf(ctx, "mailbox_error", "direct_log", map[string]any{"error": err.Error()})
+		return
+	}
+	a.addToView(RoleForLogRole(e.Role), e.ID)
+	a.auditf(ctx, "human_direct", string(from), map[string]any{
+		"agent_id": string(a.id), "chars": len([]rune(msg.Text)),
+	})
 }
 
 // handleEscalationFromBelow 是父对 MsgEscalation 的框架级处理（Part 11.3

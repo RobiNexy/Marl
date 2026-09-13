@@ -73,25 +73,25 @@ func (v *agentViewOps) Execute(ctx context.Context, kind orchestrate.OpKind, sel
 		})
 		switch dec.Action {
 		case gate.ActionNeedHuman:
-			// GATE_PENDING_HUMAN（需要数字的失败面）：挂起面在 agent 的
-			// gatePending（eventLoop 尾部 errGatePending → awaitGate →
-			// Evaluate（Approver 启动）→ 恢复）。
+			// GATE_PENDING_HUMAN（需要数字的失败面）：审批请求经人类
+			// Actor 的收件箱往返（Part 14.7 统一面——llm_call 与编排
+			// 共用 requestGateReview / awaitGate；挂起登记是 Watchdog
+			// 停摆告警的数据源）。
 			v.a.auditf(ctx, "gate_request", string(kind), map[string]any{
 				"agent_id": string(v.a.id), "pct": d.Percent, "tokens": d.DestTokens,
 			})
-			v.a.mu.Lock()
-			v.a.gatePending = &pendingGate{req: &gate.Request{
+			attrs := viewDestructAttrs(d, d.TotalView)
+			res := v.a.requestGateReview(ctx, &gate.Request{
 				Kind:       gate.KindOrchestration,
 				AgentID:    v.a.id,
-				Attributes: viewDestructAttrs(d, d.TotalView),
-			}}
-			v.a.mu.Unlock()
+				Attributes: attrs,
+			}, attrs, dec)
 			return map[string]any{
 				"ok":                     false,
-				"error":                  "GATE_PENDING_HUMAN",
+				"error":                  res.ErrorType,
 				"cache_destroyed_pct":    d.Percent,
 				"cache_destroyed_tokens": d.DestTokens,
-				"message":                fmt.Sprintf("此操作将破坏 %s 的已缓存前缀，等待人类审批（本次未执行）。", fmtDestruction(d)),
+				"message":                fmt.Sprintf("此操作将破坏 %s 的已缓存前缀。%s", fmtDestruction(d), res.Message),
 			}
 		case gate.ActionDeny:
 			return map[string]any{"ok": false, "error": "GATE_DENIED",

@@ -29,13 +29,13 @@ func orchRegistry(t *testing.T) skill.Registry {
 // setupOrchAgent 是带编排五件套与 limits 的 agent（newTestAgent 之后注入）。
 func setupOrch(t *testing.T, llm *fakeLLM, rules []gate.Rule) *Agent {
 	a, _ := llmCallAgentAndFake(t, func(c *LLMCallConfig) {
-		approver := func(req *gate.Request) (*gate.Decision, gate.Grant) {
-			// 测试的"人类"总是 allow + grant next 2 次编排（覆盖 need_human
-			// → 恢复 → 模型重发直行 的链路；Part 11.3 §3.3）。
-			return &gate.Decision{Action: gate.ActionAllow, Reason: "人类放行"}, gate.Grant{Mode: gate.GrantCount, Count: 2}
-		}
-		c.Gates = gateMustManager(t, rules, approver)
+		c.Gates = gateMustManager(t, rules)
 	})
+	// 测试的"人类"（ScriptedHuman 的进程内形态）：审批请求 → 立即回信
+	// allow + grant next 2 次编排（覆盖 need_human → 恢复 → 模型重发直行
+	// 的链路；Part 11.3 §3.3 / Part 14.7 的信封往返）。
+	link := newFakeHumanLink(nil)
+	wireHuman(a, link)
 	a.llm = llm // llmCallAgentAndFake 的默认脚本是 llm_call 面的——编排测试换成模型脚本
 	a.skills = orchRegistry(t)
 	a.authorizer = skill.NewAuthorizer(a.skills, nil)

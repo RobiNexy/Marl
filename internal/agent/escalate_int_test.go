@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"marl/internal/actor"
 	"marl/internal/proto"
 	"marl/internal/spawner"
 	"marl/internal/store"
@@ -124,12 +125,21 @@ func TestEscalationParentACKByPump(t *testing.T) {
 	parentNS := &types.Namespace{AgentID: "parent-1", Mounts: []types.Mount{
 		{Pattern: "**", Mode: types.PathWrite},
 	}}
-	mb := sp.Bootstrap("parent-1", parentNS)
-	// 发起者（子）也在进程表里（真实拓扑的 ACK 路由目标）。
+	parentBackend := actor.NewChannelBackend(32)
+	if err := sp.RegisterAgent(context.Background(), "parent-1", 1, parentNS,
+		actor.AgentCaps(true), parentBackend); err != nil {
+		t.Fatal(err)
+	}
+	// 发起者（子）也在进程表里（真实拓扑的 ACK 路由目标；AI 第 2 层）。
 	subNS := &types.Namespace{AgentID: "sub-1", Mounts: []types.Mount{
 		{Pattern: "**", Mode: types.PathWrite},
 	}}
-	mbSub := sp.Bootstrap("sub-1", subNS)
+	subBackend := actor.NewChannelBackend(32)
+	if err := sp.RegisterAgent(context.Background(), "sub-1", 2, subNS,
+		actor.AgentCaps(false), subBackend); err != nil {
+		t.Fatal(err)
+	}
+	mb, mbSub := parentBackend.Receive(), subBackend.Receive()
 
 	a, _ := newTestAgent(t, &fakeLLM{})
 	a.spawner = sp

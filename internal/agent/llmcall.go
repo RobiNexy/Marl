@@ -70,13 +70,11 @@ type LLMCallConfig struct {
 	Wires WireRunners
 }
 
-// errGatePending 是 eventLoop 的内部哨兵（llm_call 超限审批挂起）。
-var errGatePending = errors.New("agent: llm_call awaiting gate")
-
-// pendingGate 是等待人类审批的一次 llm_call（Agent 持有；awaitGate 消费）。
-type pendingGate struct {
-	req   *gate.Request
-	attrs map[string]any
+// gatePDP 是 Agent 对 Gate PDP 的窄面（消费侧定义；Part 14 只问非阻塞
+// 决策——审批往返是 MsgGateRequest/MsgGateReply 信封，不再有阻塞式
+// Evaluate）。
+type gatePDP interface {
+	Decide(ctx context.Context, req *gate.Request) gate.Decision
 }
 
 // llmCallArgs 是 schema 的参数形态。
@@ -142,16 +140,9 @@ func (a *Agent) intentLLMCall(ctx context.Context, call types.ToolCall) (*skill.
 	case gate.ActionAllow:
 		// 额度内 / 规则放行 → 继续执行。
 	case gate.ActionNeedHuman:
-		// 挂起：PendingGate 的注册 + Blocked(AwaitingGate)（Run 外层）。
-		a.mu.Lock()
-		a.gatePending = &pendingGate{req: req, attrs: attrs}
-		a.mu.Unlock()
-		a.auditf(ctx, "gate_pending", "llm_call", map[string]any{
-			"agent_id": string(a.id), "rule": dec.RuleID, "reason": dec.Reason, "input_tokens": inputTokens,
-		})
-		return skill.NewFailure(ErrCodeGatePendingHuman,
-			"命中规则 %s：%s\n属性：%s\n已生成审批文件，等待人类裁决（本次调用未执行）。",
-			dec.RuleID, dec.Reason, gate.AttributesSummary(attrs)), nil
+		// 挂起：审批请求 → 人类 Actor 的收件箱（Part 14.7 信封化往返；
+		// pending 登记在 requestGateReview，恢复面在 awaitGate）。
+		return a.requestGateReview(ctx, req, attrs, dec), nil
 	default:
 		return skill.NewFailure(ErrCodeGateDenied, "命中规则 %s：%s", dec.RuleID, dec.Reason), nil
 	}
@@ -193,7 +184,7 @@ func llmCallAttrs(a *Agent, args *llmCallArgs, inputTokens int) map[string]any {
 }
 
 // gates 的默认面（Manager 未装配 → deny 的显式拒绝面）。
-func (a *Agent) gates() gate.Decider {
+func (a *Agent) gates() gatePDP {
 	if a.llmCallCfg.Gates != nil {
 		return a.llmCallCfg.Gates
 	}
@@ -203,13 +194,9 @@ func (a *Agent) gates() gate.Decider {
 // nilPDP 的显式拒绝面（配错装配时调用直接拒绝——"没人把关"不能变成放行）。
 type nilPDP struct{}
 
-func (nilPDP) Evaluate(ctx context.Context, req *gate.Request) gate.Decision {
+func (nilPDP) Decide(ctx context.Context, req *gate.Request) gate.Decision {
 	return gate.Decision{Action: gate.ActionDeny, RuleID: "no-gate-config",
 		Reason: "未装配 Gate（limits 缺失装配）；llm_call 默认拒绝即便参数在限内"}
-}
-
-func (nilPDP) Decide(ctx context.Context, req *gate.Request) gate.Decision {
-	return nilPDP{}.Evaluate(ctx, req)
 }
 
 // llmCallWire 解析 wire（main = 活引用；sidecars 的命名空间见 WireRunners）。
@@ -371,49 +358,6 @@ func containsStr(all []string, want string) bool {
 		}
 	}
 	return false
-}
-
-// awaitGate 进入 Blocked(AwaitingGate) 等待人类裁决（Part 11.3 的挂起面；
-// 等待期零 LLM 调用）。GATE_PENDING 的 tool_result 已经回填给了模型——
-// 审批通过后**下一轮由模型重发 llm_call**（session grant 让它直行）；
-// deny 同理，模型读到拒绝原因自行调整。框架不做"审批后自动重放"——
-// 调度权在 Agent 手里（Part 11.7 的 defer/commit 已砍）。
-//
-// 恢复后注入一条 RoleHumanNote 的裁决摘要（RuleID/Grant）让上下文里
-// 有对账键。ctx 取消保留 pending（讨论语义一致）。
-func (a *Agent) awaitGate(ctx context.Context) error {
-	a.mu.Lock()
-	p := a.gatePending
-	a.mu.Unlock()
-	if p == nil {
-		return nil
-	}
-	a.state = types.StateBlocked
-	a.blockReason = types.BlockAwaitingGate
-	a.auditState(ctx, "blocked", string(types.BlockAwaitingGate))
-	// 阻塞到 Approver 返回（Manager 的 need_human 面已 block 在 FileApprover
-	// 的轮询里）。重放 Evalu ate：规则可能已被"always-grant"短路。
-	dec := a.gates().Evaluate(ctx, p.req)
-	a.state = types.StateRunning
-	a.blockReason = ""
-	a.auditState(ctx, "running", "")
-	if errors.Is(ctx.Err(), context.Canceled) {
-		return ctx.Err()
-	}
-	e := types.NewLogEntry(a.id, types.RoleHumanNote,
-		fmt.Sprintf("Gate 裁决：rule=%s action=%s（%s）", dec.RuleID, dec.Action, dec.Reason))
-	e.Meta = map[string]any{"gate_kind": string(p.req.Kind), "rule": dec.RuleID}
-	if _, err := a.log.Append(ctx, e); err != nil {
-		return fmt.Errorf("agent: append gate verdict: %w", err)
-	}
-	a.addToView(RoleForLogRole(e.Role), e.ID)
-	a.auditf(ctx, "gate_resolved", string(p.req.Kind), map[string]any{
-		"agent_id": string(a.id), "rule": dec.RuleID, "action": string(dec.Action),
-	})
-	a.mu.Lock()
-	a.gatePending = nil
-	a.mu.Unlock()
-	return nil
 }
 
 // ---- 装配面：静态 wire 集（llm_wires 配置的载体） ----

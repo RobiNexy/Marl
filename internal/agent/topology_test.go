@@ -72,12 +72,12 @@ func TestThreeLevelFork(t *testing.T) {
 
 	// 子脚本：fork 1 个孙（写孙专属文件）→ report success。
 	// 孙脚本：file_write（在子传下来的 writable 范围内）→ report success。
-	// depth==1（子）：fork 一个孙（任务文本携带孙专属的文件名）→
-	// 等孙 report → 自己 report 到根。
-	// depth>=2（孙）：写孙专属文件（plan.Task 里的文件名）→ report。
+	// depth==2（子，Part 14.6 记账后）：fork 一个孙（任务文本携带孙专属
+	// 的文件名）→ 等孙 report → 自己 report 到根。
+	// depth>=3（孙）：写孙专属文件（plan.Task 里的文件名）→ report。
 	ff.scriptFn = func(plan *spawner.ChildPlan) []*wire.WireTurn {
 		name := grandFileName(plan.Task)
-		if plan.Depth >= 2 {
+		if plan.Depth >= 3 {
 			return []*wire.WireTurn{
 				toolCallTurn(mkCallID("file_write", "fw-"+string(plan.ID), map[string]any{
 					"path": "src/auth/" + name, "content": "grand " + string(plan.ID) + " here\n",
@@ -169,10 +169,11 @@ func TestDepthAtTopRejectedToLLM(t *testing.T) {
 	ctx := context.Background()
 	rootAgent, _, ff, _, _ := setupForkMulti(t)
 
-	// 孙的脚本：尝试再 fork（深度 2 > MaxDepth 2 的闸）→ report success 直退。
+	// 孙的脚本：尝试再 fork（深度 3 的孙再 fork = 4 > MaxDepth 3 的闸）
+	// → report success 直退。
 	// 子脚本：fork 这个孙，等孙 report，然后自己 report。
 	ff.scriptFn = func(plan *spawner.ChildPlan) []*wire.WireTurn {
-		if plan.Depth == 1 {
+		if plan.Depth == 2 {
 			// 子：fork 孙，孙再 fork 失败后不影响子收 report。
 			return []*wire.WireTurn{
 				toolCallTurn(spawnCall("coder", "深度 2 的孙任务（孙再 fork 被拒）", []string{"src/auth/**"}, nil)),

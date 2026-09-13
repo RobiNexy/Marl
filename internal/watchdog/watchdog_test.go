@@ -184,3 +184,40 @@ func (k *kidnapAudit) Append(ctx context.Context, ev *store.AuditEvent) error {
 func (k *kidnapAudit) Query(ctx context.Context, filter store.AuditFilter) ([]*store.AuditEvent, error) {
 	return nil, fmt.Errorf("not needed")
 }
+
+// TestPendingOverrunAlerts：等待人类的挂起分支超阈值 → 升级告警
+// （watchdog_pending_overrun）——告警不是终止：卡死不烧钱，去留归人
+// （Part 14.8"卡死选择的依据"）。
+func TestPendingOverrunAlerts(t *testing.T) {
+	ctx := context.Background()
+	tbl := newFakeTable()
+	tbl.procs = []ProcessSnapshot{
+		{ID: "waiting-gate", State: types.StateBlocked, PendingKind: "awaiting_gate",
+			PendingAt: time.Now().Add(-25 * time.Hour)}, // 停摆 25h > 24h 阈值
+		{ID: "fresh-block", State: types.StateBlocked, PendingKind: "discussing",
+			PendingAt: time.Now()}, // 刚挂起：不告警
+		{ID: "no-pending", State: types.StateBlocked, PendingKind: "",
+			PendingAt: time.Now().Add(-48 * time.Hour)}, // 无挂起登记：不告警
+	}
+	var audMem []*store.AuditEvent
+	aud := &kidnapAudit{sink: func(ev *store.AuditEvent) { audMem = append(audMem, ev) }}
+	wd, err := New(Config{Table: tbl, Log: &growingLog{seqOf: map[types.AgentID]int64{}, tokOf: map[types.AgentID]int64{}},
+		Interval: time.Hour, PendingOverrun: 24 * time.Hour, Audit: aud})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd.scan(ctx)
+	// 告警面：审计里的 pending_overrun 恰好一条（只针对 waiting-gate）。
+	n := 0
+	for _, ev := range audMem {
+		if ev.Action == "watchdog_pending_overrun" && ev.Target == "waiting-gate" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("pending overrun alerts = %d, want 1（终止=%v）", n, tbl.term)
+	}
+	if len(tbl.term) != 0 {
+		t.Fatalf("挂起告警不得终止任务（卡死是确认过的回退策略）: %v", tbl.term)
+	}
+}

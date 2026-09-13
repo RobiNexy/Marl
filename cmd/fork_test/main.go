@@ -21,8 +21,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"marl/internal/actor"
 	"marl/internal/agent"
 	"marl/internal/fossil"
 	"marl/internal/ladder"
@@ -175,12 +177,12 @@ func run(o options) error {
 		return fmt.Errorf("fossil open: %w", err)
 	}
 
-	// --- Spawner（裁决关口 + 进程表）---
+	// --- Spawner（裁决关口 + 进程表；Part 14.6：max_depth 只记 AI→AI）---
 	spw, err := spawner.New(spawner.Config{
-		MaxDepth:        1,
+		MaxDepth:        2,
 		MaxActive:       8,
 		MaxForkRounds:   3,
-		CanSpawnAtDepth: func(depth int) bool { return depth == 0 },
+		CanSpawnAtDepth: func(depth int) bool { return depth == 1 },
 		Log:             st,
 		Audit:           store.AuditSQLite{SQLiteStore: st},
 	})
@@ -188,12 +190,16 @@ func run(o options) error {
 		return fmt.Errorf("spawner: %w", err)
 	}
 
-	// --- 父 Agent ---
-	parentNS := &types.Namespace{AgentID: "root-1", Mounts: []types.Mount{
-		{Pattern: "**", Mode: types.PathWrite},
-		{Pattern: ".marl-fork/**", Mode: types.PathHidden},
-	}}
-	mb := spw.Bootstrap("root-1", parentNS)
+	// --- 统一 Actor 面（Part 14）：人类是监督树的根，项目 Agent 经正常
+	// 裁决创建（旧 Bootstrap 特例删除；根的 report 投给人类收件箱）。---
+	humanBackend := actor.NewChannelBackend(16)
+	humanActor, err := actor.NewHuman(actor.HumanID("operator"), humanBackend, actor.HumanCaps())
+	if err != nil {
+		return fmt.Errorf("human actor: %w", err)
+	}
+	if err := spw.RegisterHuman(ctx, humanActor); err != nil {
+		return fmt.Errorf("register human: %w", err)
+	}
 	newLine := func(agentID types.AgentID) (types.Binding, agent.LLMExecutor, error) {
 		router, err := ladder.NewRouter(cat, ladderCfg, ladder.RouterPolicy{})
 		if err != nil {
@@ -206,59 +212,62 @@ func run(o options) error {
 		return b, &forkLine{norm: norm, denorm: wire.NewOpenAICompatDenormalizer(), adapter: adapter, binding: b, bucketField: wire.DefaultBucketField}, nil
 	}
 
-	// --- 子工厂（Spawner 裁决批准后调用）---
+	// --- 子工厂（Spawner 裁决批准后调用；depth=1 是项目 Agent 根——
+	// 工厂同一入口构建，带单写者提交面）---
 	factory := &childFactory{t: st, reg: reg, root: root, resolver: resolver, chk: chk,
-		spw: spw, newLine: newLine, dryRun: o.dryRun}
+		spw: spw, newLine: newLine, dryRun: o.dryRun, vcs: cli, repo: repo}
 	if err := spw.SetFactory(factory); err != nil {
 		return err
 	}
 
-	pb, pll, err := newLine("root-1")
-	if err != nil {
-		return err
-	}
-	var parentLLM agent.LLMExecutor = pll
-	if o.dryRun {
-		parentLLM = &parentScript{}
-	}
-	parent, err := agent.New(agent.Config{
-		ID:           "root-1",
-		SystemPrompt: "你是父 Agent：把可独立完成的子任务 fork 给子 Agent；等子 report 后汇总。",
-		MaxRounds:    8,
-		Log:          st,
-		Views:        st,
-		LLM:          parentLLM,
-		Skills:       reg,
-		Namespace:    parentNS,
-		Resolver:     resolver,
-		ProjectRoot:  root,
-		Sampling:     types.SamplingParams{MaxTokens: 1024, TimeoutMs: 120_000},
-		Thinking:     pb.Thinking,
-		Mailbox:      mb,
-		Spawner:      spw,
-		Committer:    &agent.CommitConfig{VCS: cli, RepoPath: repo},
-		TaskID:       "fork-task",
-		Audit:        store.AuditSQLite{SQLiteStore: st},
-	})
-	if err != nil {
-		return fmt.Errorf("parent agent: %w", err)
-	}
-	if err := parent.SetBinding(pb); err != nil {
-		return err
-	}
 	task := "列出 src/ 下所有 .go 文件，fork 一个子 Agent；" +
 		"子任务：在 src/auth/ 下写 summary.txt，内容为三行以内的 src/main.go 摘要。" +
 		"等子完成后，用不超过三句话总结它做了什么。"
-	if err := parent.AppendUser(ctx, task); err != nil {
-		return err
+	dec, err := spw.Adjudicate(ctx, &proto.SpawnRequest{
+		RequesterID:     humanActor.ID(),
+		ProfileID:       "default",
+		TaskDescription: task,
+		WritablePaths:   []string{"**"},
+	})
+	if err != nil {
+		return fmt.Errorf("project agent adjudicate: %w", err)
 	}
-	if err := parent.Run(ctx); err != nil {
-		return fmt.Errorf("run: %w", err)
+	if dec.Status != proto.SpawnApproved {
+		return fmt.Errorf("project agent rejected: %+v", dec)
+	}
+	rootID := dec.ChildAgentID
+
+	// 等项目 Agent 的 report 到人类收件箱（Part 14.5：根有父，父是
+	// HumanActor；"无父收 report"的特例消失）。
+waitLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting project agent report")
+		case env := <-humanBackend.Receive():
+			if env.Type != proto.MsgChildReport {
+				continue
+			}
+			rp, ok := env.Payload.(*proto.ChildReport)
+			if !ok {
+				return fmt.Errorf("human inbox payload mismatch: %T", env.Payload)
+			}
+			fmt.Printf("（人类收件箱 ← %s：%s）\n", env.From, firstLineOf(rp.Report))
+			break waitLoop
+		}
 	}
 
-	printTree(parent, spw)
+	printTree(rootID, spw)
 	printTimeline(ctx, repo, cli)
-	return printLog(ctx, parent.ID(), st, o.dbPath)
+	return printLog(ctx, rootID, st, o.dbPath)
+}
+
+// firstLine 取多行文本的首行（收件箱回执的终端显示形态）。
+func firstLineOf(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // singleRungLadder 构造单档阶梯（阶段 5/6 不测升级；计价从 ladder-mini.yaml
@@ -284,7 +293,9 @@ func singleRungLadder(o options) *ladder.Config {
 // capsFor 把静态目录适配成 Normalizer 的能力源。
 func capsFor(cat *ladder.StaticCatalog) wire.CapsProvider { return cat }
 
-// childFactory 是 Spawner.ChildFactory 的装配实现（构建子 Agent，不启动）。
+// childFactory 是 Spawner.ChildFactory 的装配实现（构建子 Agent，不启动；
+// depth=1 的计划是项目 Agent 根——人类 requester 的裁决产物，带单写者
+// 提交面）。
 type childFactory struct {
 	t        *store.SQLiteStore
 	reg      skill.Registry
@@ -294,6 +305,8 @@ type childFactory struct {
 	spw      *spawner.Spawner
 	newLine  func(types.AgentID) (types.Binding, agent.LLMExecutor, error)
 	dryRun   bool
+	vcs      *fossil.CLI
+	repo     string
 }
 
 func (f *childFactory) BuildChild(ctx context.Context, plan *spawner.ChildPlan, req *proto.SpawnRequest) (spawner.ChildRunner, error) {
@@ -301,14 +314,11 @@ func (f *childFactory) BuildChild(ctx context.Context, plan *spawner.ChildPlan, 
 	if err != nil {
 		return nil, err
 	}
-	if f.dryRun {
-		llm = &childScript{}
-	}
-	child, err := agent.New(agent.Config{
+	cfg := agent.Config{
 		ID:            plan.ID,
 		ParentID:      plan.ParentID,
 		Depth:         plan.Depth,
-		MaxDepth:      1,
+		MaxDepth:      2,
 		Mailbox:       plan.Mailbox, // 多层拓扑的 report 路由面（阶段 9）
 		SystemPrompt:  "你是子 Agent：完成任务后调用 report_to_parent 汇报结果。",
 		MaxRounds:     6,
@@ -325,7 +335,30 @@ func (f *childFactory) BuildChild(ctx context.Context, plan *spawner.ChildPlan, 
 		ReportSink:    f.spw,
 		ReportChecker: f.chk,
 		TaskID:        "fork-task",
-	})
+		Audit:         store.AuditSQLite{SQLiteStore: f.t},
+	}
+	if plan.Depth == 1 {
+		// 项目 Agent 根：单写者提交面（只有父 Agent 装配——提交点在
+		// 父的唯一代码路径上，Part 8.4）；等子 report 后 commit。
+		cfg.SystemPrompt = "你是项目 Agent（人类是你的父）：把可独立完成的子任务 fork 给子 Agent；等子 report 后汇总并 report_to_parent。"
+		cfg.MaxRounds = 8
+		cfg.Committer = &agent.CommitConfig{VCS: f.vcs, RepoPath: f.repo}
+		if f.dryRun {
+			llm = &parentScript{}
+			cfg.LLM = llm
+		}
+	} else if f.dryRun {
+		cfg.LLM = &childScript{}
+	}
+	child, err := agent.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if plan.Depth == 1 {
+		if err := child.SetBinding(b); err != nil {
+			return nil, err
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +392,11 @@ func (p *parentScript) ExecuteTurn(_ context.Context, _ *wire.CanonicalRequest) 
 			"writable_paths": []string{"src/auth/**"},
 		}))), nil
 	default:
-		return withUsageT(replyTurnT("子 Agent 读完了 src/main.go：一个打印 hello 的 main 包入口。任务完成。")), nil
+		// 统一面（Part 14.5）：项目 Agent 的父是 HumanActor——report 收尾。
+		return withUsageT(toolCallTurnT(mkT("report_to_parent", map[string]any{
+			"status": "success",
+			"report": "子 Agent 读完了 src/main.go：一个打印 hello 的 main 包入口。任务完成。",
+		}))), nil
 	}
 }
 
@@ -463,15 +500,13 @@ func printTimeline(ctx context.Context, repo string, cli *fossil.CLI) {
 	}
 }
 
-// printTree 打印 Agent 树（marl status 的雏形；Part 8.6 的可观测性）。
-func printTree(parent *agent.Agent, spw *spawner.Spawner) {
-	fmt.Println("━━━━━━━━━━ Agent 树 ━━━━━━━━━━")
-	depth, state, _ := spw.ProcessOf(parent.ID())
-	fmt.Printf("root-1 (depth=%d) state=%s\n", depth, state)
-	for id, st := range parent.ChildrenStatus() {
-		cd, cs, _ := spw.ProcessOf(id)
-		fmt.Printf("  ├─ %s (depth=%d) state=%s status=%v\n", id, cd, cs, st)
+// printTree 打印 Agent 树（从统一进程表渲染——人类是根，Part 14.6）。
+func printTree(rootID types.AgentID, spw *spawner.Spawner) {
+	fmt.Println("━━━━━━━━━━ Actor 树（人类为根）━━━━━━━━━━")
+	for _, p := range spw.Snapshot() {
+		fmt.Printf("%s (kind=%s depth=%d) state=%s\n", p.ID, p.Kind, p.Depth, p.State)
 	}
+	_ = rootID
 }
 
 // printLog 打印父的 Log（交付判据：sub_task_result 可见）。

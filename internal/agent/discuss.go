@@ -167,10 +167,12 @@ func (a *Agent) awaitDiscussion(ctx context.Context) error {
 	a.state = types.StateBlocked
 	a.blockReason = types.BlockDiscussing
 	a.auditState(ctx, "blocked", string(types.BlockDiscussing))
-	a.discussPending = false // 恢复后的下一轮不被同一条 errDiscussing 重入
+	a.markPending(string(types.BlockDiscussing)) // Watchdog 的停摆告警数据源（Part 14.8）
+	a.discussPending = false                     // 恢复后的下一轮不被同一条 errDiscussing 重入
 	outcome, err := a.discussCfg.Manager.Wait(ctx, sess)
 	a.state = types.StateRunning
 	a.blockReason = ""
+	a.clearPending()
 	a.auditState(ctx, "running", "")
 	if err != nil {
 		return err // ctx 取消（唯一失败路径）

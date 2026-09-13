@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"marl/internal/actor"
 	"marl/internal/proto"
 	"marl/internal/skill"
 	"marl/internal/spawner"
@@ -117,10 +118,12 @@ func setupFork(t *testing.T) (*Agent, *spawner.Spawner, *forkFactory, *store.SQL
 		t.Fatal(err)
 	}
 	spw, err := spawner.New(spawner.Config{
-		MaxDepth:        1,
+		// Part 14.6 深度语义：人类 d0 → 项目 Agent（父，d1）→ 子 d2；
+		// max_depth=2 顶格（孙 d3 被拒）。
+		MaxDepth:        2,
 		MaxActive:       8,
 		MaxForkRounds:   3,
-		CanSpawnAtDepth: func(depth int) bool { return depth == 0 },
+		CanSpawnAtDepth: func(depth int) bool { return depth == 1 },
 		Log:             st,
 	})
 	if err != nil {
@@ -129,9 +132,15 @@ func setupFork(t *testing.T) (*Agent, *spawner.Spawner, *forkFactory, *store.SQL
 	parentNS := &types.Namespace{AgentID: "parent-1", Mounts: []types.Mount{
 		{Pattern: "**", Mode: types.PathWrite},
 	}}
-	mb := spw.Bootstrap("parent-1", parentNS)
 	ff := &forkFactory{t: t, st: st, reg: reg, root: root, spw: spw, chk: chk}
 	if err := spw.SetFactory(ff); err != nil {
+		t.Fatal(err)
+	}
+	// 父 Agent 的进程表登记（装配级：测试自管生命周期的 fixture——
+	// 不走 Adjudicate 的创建路径；AI 第 1 层；backend 的读端 = 父信箱）。
+	parentBackend := actor.NewChannelBackend(32)
+	if err := spw.RegisterAgent(context.Background(), "parent-1", 1, parentNS,
+		actor.AgentCaps(true), parentBackend); err != nil {
 		t.Fatal(err)
 	}
 
@@ -147,12 +156,12 @@ func setupFork(t *testing.T) (*Agent, *spawner.Spawner, *forkFactory, *store.SQL
 		Resolver:     mustResolver(t, root),
 		ProjectRoot:  root,
 		Sampling:     types.SamplingParams{MaxTokens: 512},
-		Mailbox:      mb,
 		Spawner:      spw,
 	})
 	if err != nil {
 		t.Fatalf("parent: %v", err)
 	}
+	parent.mailbox = parentBackend.Receive() // pump 的消费面（子的信封由此到达）
 	return parent, spw, ff, st, root
 }
 
@@ -182,10 +191,12 @@ func setupForkMulti(t *testing.T) (*Agent, *spawner.Spawner, *forkFactory, *stor
 		t.Fatal(err)
 	}
 	spw, err := spawner.New(spawner.Config{
-		MaxDepth:      2,
+		// Part 14.6 深度语义：人类 d0 → 项目 Agent（父，d1）→ 子 d2 →
+		// 孙 d3；max_depth=3 顶格（孙再 fork 被拒 = MAX_DEPTH 的演示判据）。
+		MaxDepth:      3,
 		MaxActive:     16,
 		MaxForkRounds: 3,
-		// 深度权限谓词不设限（深度 2 处"到顶拒绝"的判据必须是
+		// 深度权限谓词不设限（深度 3 处"到顶拒绝"的判据必须是
 		// MAX_DEPTH_REACHED——角色谓词来说和它抢第一归因位）。
 		CanSpawnAtDepth: func(int) bool { return true },
 		Log:             st,
@@ -196,9 +207,14 @@ func setupForkMulti(t *testing.T) (*Agent, *spawner.Spawner, *forkFactory, *stor
 	parentNS := &types.Namespace{AgentID: "parent-1", Mounts: []types.Mount{
 		{Pattern: "**", Mode: types.PathWrite},
 	}}
-	mb := spw.Bootstrap("parent-1", parentNS)
-	ff := &forkFactory{t: t, st: st, reg: reg, root: root, spw: spw, chk: chk, childMaxDepth: 2}
+	ff := &forkFactory{t: t, st: st, reg: reg, root: root, spw: spw, chk: chk, childMaxDepth: 3}
 	if err := spw.SetFactory(ff); err != nil {
+		t.Fatal(err)
+	}
+	// 父的进程表登记（装配级 fixture；AI 第 1 层）。
+	parentBackend := actor.NewChannelBackend(32)
+	if err := spw.RegisterAgent(context.Background(), "parent-1", 1, parentNS,
+		actor.AgentCaps(true), parentBackend); err != nil {
 		t.Fatal(err)
 	}
 	parent, err := New(Config{
@@ -211,11 +227,12 @@ func setupForkMulti(t *testing.T) (*Agent, *spawner.Spawner, *forkFactory, *stor
 		Namespace: parentNS,
 		Resolver:  mustResolver(t, root), ProjectRoot: root,
 		Sampling: types.SamplingParams{MaxTokens: 512},
-		Mailbox:  mb, Spawner: spw,
+		Spawner:  spw,
 	})
 	if err != nil {
 		t.Fatalf("parent: %v", err)
 	}
+	parent.mailbox = parentBackend.Receive()
 	return parent, spw, ff, st, root
 }
 

@@ -948,3 +948,53 @@ fork 稳定性）、真机跑（`fork_test`：父 fork 子 → 子只读 report 
 
 **依据**：实时 curl 复核（2026-09-12T17:29+08:00，`deepseek-flash` 正常返回）、
 改名后全量测试通过、真机 mini 复跑（厂商 tool_call id + 真实仓库目录内容）。
+
+## ADR-0032：统一 Actor 模型的六项落地裁决（阶段 12 / Part 14）
+
+**背景**：Part 14 把人类与 Agent 在交互面统一为 Actor（人类进进程表），
+删四个特例机制（根特殊化、Gate 投递、say 注入、escalation 终态）。
+
+1. **ActorID 是 types.AgentID 的别名**，不是独立类型。既有 Agent 身份
+   （Log/audit/缓存桶/fossil author）全以 AgentID 为键；可判别性由
+   `human:` 前缀承担（Agent = 无前缀），格式契约在 actor 包的构造/
+   校验函数。全仓换类型没有行为收益，只有 churn。[权衡: 放弃"编译期
+   排除人类 ID 混入 Agent 字段"的类型安全——换来零迁移成本；混用的
+   防线是 ValidID/IsHumanID 的显式校验点。]
+
+2. **Kind 的读取只允许两处**：呈现层（图标/颜色）与拓扑记账（注册点把
+   Kind 映射为 Process.AIRecursion，max_depth 只约束 AI→AI fork——
+   裁决期读的是进程表的拓扑事实，不是 Kind 分支）。权威判断一律读
+   CapSet：AI 的 spawn 许可 = CanSpawnAtDepth 谓词（Profile 形态），
+   人类 = CapSet.CanSpawn（被收窄的替身人类被拒——纪律 1 的反例由
+   TestHumanCapsAuthority 钉死）。
+
+3. **FileApprover 删除，审批往返信封化**。need_human 是 Manager 的
+   **决策**（不阻塞）；MsgGateRequest 经人类 Actor 的文件后端投递，
+   裁决是 MsgGateReply，grant 由 ResolveGate 兑现。文件编码/nonce/
+   静默窗的单一实现点在 actor.FileBackend（从 gate/file.go 迁移并
+   泛化）。回执的 nonce 对账锚点是 FileBackend 私有的 issued 记忆
+   （Deliver 时登记）——陈旧回放结构性排除。
+
+4. **深度记账重编号**：人类 d0、项目 Agent = AI 第 1 层（旧根 d0 →
+   全体 +1）。max_depth=3 = 三层 AI 递归，能力面与旧编号一致（实测
+   topo_test 的三层拓扑 + MAX_DEPTH 演示不变）。[权衡: 一次性的测试
+   与文档数字改版，换来 Part 14.6 的语义纯度（人类 spawn 不占 AI 额度
+   不再需要特判）。]
+
+5. **grants/ 落盘用 frontmatter 而非 internal/config 的 YAML 解析器**。
+   config 包依赖 gate（规则解析），gate 反向引包成环；grant 文件是
+   键值对齐的 frontmatter 形态，20 行解析的复制成本低于反转依赖方向。
+   文件记录 granted_by（ActorID）/granted_at——授权链从决策时点延伸
+   到重启之后。
+
+6. **escalation 与讨论机制保留**（14.12 改动清单未列重构）：escalate.
+   Mailbox 与 discuss 的 verdict 流是收件箱子树（requests/ / discussions/，
+   与 approvals/ + grants/ 同属控制面）；把它们改写成信封是纯形式收益
+   低、破坏面高的操作——按"删的比加的多"标准不做。
+
+**实测记录**：FileBackend 的 gate 往返（Deliver 模板 → 人类 @grant next 2
+→ Receive 解析 → done/ 归档）在 fossil 2.26 / Linux 实测通过；nonce 不
+匹配（人工篡改 frontmatter）被拒且文件留观。ScriptedHuman 四场景
+（讨论/审批/escalation/grant）进 CI。`marl start` 真机跑通（DeepSeek
+真密钥）：项目 Agent report 落人类收件箱；`marl status` 显示人类为根的
+监督树。

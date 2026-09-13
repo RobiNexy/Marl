@@ -92,7 +92,7 @@ func llmCallAgentAndFake(t *testing.T, cfg func(*LLMCallConfig)) (*Agent, *LLMCa
 func TestLLMCallHappy(t *testing.T) {
 	ctx := context.Background()
 	a, _ := llmCallAgentAndFake(t, func(c *LLMCallConfig) {
-		c.Gates = gateMustManager(t, []gate.Rule{{ID: "allow-under", Match: map[string]string{"kind": string(gate.KindLLMCall)}, Action: gate.ActionAllow}}, nil)
+		c.Gates = gateMustManager(t, []gate.Rule{{ID: "allow-under", Match: map[string]string{"kind": string(gate.KindLLMCall)}, Action: gate.ActionAllow}})
 	})
 	// 记账面（call_type=llm_call 的真实落库）：真实 SQLite ledger。
 	db, err := store.OpenSQLite(t.TempDir() + "/llm-ledger.db")
@@ -124,31 +124,16 @@ func TestLLMCallHappy(t *testing.T) {
 	}
 }
 
-// gateMustManager / fnApprover 是 gate.Manager 的测试装配（不止本文件用）。
-func gateMustManager(t *testing.T, rules []gate.Rule, approver func(*gate.Request) (*gate.Decision, gate.Grant)) *gate.Manager {
+// gateMustManager 是 gate.Manager 的测试装配（不止本文件用；Part 14 起
+// need_human 的裁决兑现走 ResolveGate——审批者不再是 Manager 的钩子，
+// 而是人类 Actor 的 MsgGateReply）。
+func gateMustManager(t *testing.T, rules []gate.Rule) *gate.Manager {
 	t.Helper()
-	var ap gate.Approver
-	if approver != nil {
-		ap = &fnApprover{fn: func(req *gate.Request) (*gate.Decision, gate.Grant) {
-			d, g := approver(req)
-			return d, g
-		}}
-	}
-	m, err := gate.NewManager(gate.ManagerConfig{Rules: rules, Approver: ap})
+	m, err := gate.NewManager(gate.ManagerConfig{Rules: rules})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return m
-}
-
-// fnApprover 是 Approver 的函数形态替身。
-type fnApprover struct {
-	fn func(*gate.Request) (*gate.Decision, gate.Grant)
-}
-
-func (f *fnApprover) Ask(ctx context.Context, req *gate.Request, rule gate.Rule) (*gate.Decision, gate.Grant, error) {
-	d, g := f.fn(req)
-	return d, g, nil
 }
 
 // stubCatalog 是 ledger 的计价替身（只需要 Pricing/计价面）。
@@ -185,7 +170,7 @@ func TestLLMCallInputTooLarge(t *testing.T) {
 	a, _ := llmCallAgentAndFake(t, func(c *LLMCallConfig) {
 		c.Gates = gateMustManager(t, []gate.Rule{{
 			ID: "allow-under", Match: map[string]string{"kind": "llm_call"}, Action: gate.ActionAllow,
-		}}, nil)
+		}})
 	})
 	huge := llmCallDial()
 	var args llmCallArgs
@@ -227,7 +212,7 @@ func TestLLMCallWireNotFound(t *testing.T) {
 	a, _ := llmCallAgentAndFake(t, func(c *LLMCallConfig) {
 		c.Gates = gateMustManager(t, []gate.Rule{{
 			ID: "allow-under", Match: map[string]string{"kind": "llm_call"}, Action: gate.ActionAllow,
-		}}, nil)
+		}})
 	})
 	call := llmCallDial()
 	var args llmCallArgs
@@ -264,7 +249,7 @@ func TestLLMCallModelNotInCatalog(t *testing.T) {
 	a, _ := llmCallAgentAndFake(t, func(c *LLMCallConfig) {
 		c.Gates = gateMustManager(t, []gate.Rule{{
 			ID: "allow-under", Match: map[string]string{"kind": "llm_call"}, Action: gate.ActionAllow,
-		}}, nil)
+		}})
 	})
 	call := llmCallDial()
 	var args llmCallArgs
@@ -296,32 +281,31 @@ func TestLLMCallModelNotInCatalog(t *testing.T) {
 }
 
 // TestLLMCallGatePendingGrant：need_human（task_call_count>=20 的字面规则）
-// → GATE_PENDING_HUMAN 回填 → Run 外层 Blocked(AwaitingGate) → 审批 grant
-// (count=2) → 模型重发直行（额度内不再打扰人类——Part 11.3 §3.3 的"问
-// 一次给一批"）。
+// → 审批请求投递给人类 Actor（MsgGateRequest，Part 14.7）→ 回执信封
+// （MsgGateReply + count=2 的 grant）→ 模型重发直行（额度内不再打扰
+// 人类——Part 11.3 §3.3 的"问一次给一批"）。挂起登记（MarkPending/
+// ClearPending）是 Watchdog 停摆告警的数据源，一并断言。
 func TestLLMCallGatePendingGrant(t *testing.T) {
-	asks := 0
-	approver := func(*gate.Request) (*gate.Decision, gate.Grant) {
-		asks++
-		return &gate.Decision{Action: gate.ActionAllow, Reason: "人类放行"},
-			gate.Grant{Mode: gate.GrantCount, Count: 2}
-	}
-	// base llm 无 sidecar 执行（用 llmCallAgentAndFake 的 hook 面：主 fake
-	// 的 llm_call 走真实的 WireSet——用 sidecar 执行器；挂起后重发两次直行）。
-	sidecarTurns := func() *wire.WireTurn { return nil }
-	_ = sidecarTurns
+	// 规则：第一次（count=0）就 need_human（>=0），审批→count=2 的额度。
 	a, _ := llmCallAgentAndFake(t, func(c *LLMCallConfig) {
-		// 规则：第一次（count=0）就 need_human（>=0），审批→count=2 的额度。
 		c.Gates = gateMustManager(t, []gate.Rule{{
 			ID:     "review-all",
 			Match:  map[string]string{"kind": "llm_call", "task_call_count": ">=0"},
 			Action: gate.ActionNeedHuman,
 			Reason: "测试：每次都要人",
-		}}, approver)
+		}})
 	})
+	link := newFakeHumanLink(nil)
+	wireHuman(a, link)
+	// 审计面接真库（granted_by 授权链的断言数据源；newTestAgent 无 Audit）。
+	adb, err := newStoreForTest(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.audit = store.AuditSQLite{SQLiteStore: adb}
 	first := llmCallDial()
 	a.llm = &fakeLLM{turns: []*wire.WireTurn{
-		toolCallTurn(first), // 第一次 → pending
+		toolCallTurn(first), // 第一次 → 审批往返
 		toolCallTurn(first), // 重发（grant 额度内直行）
 		toolCallTurn(first), // 再发（2 次额度内的第二次直行）
 		replyTurn("三次调用完成。"),
@@ -333,15 +317,21 @@ func TestLLMCallGatePendingGrant(t *testing.T) {
 	if err := a.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if asks != 1 {
-		t.Fatalf("human asked %d 次——额度内不应再问（Part 11.3 §3.3）", asks)
+	if len(link.sentRequests()) != 1 {
+		t.Fatalf("human asked %d 次——额度内不应再问（Part 11.3 §3.3）", len(link.sentRequests()))
+	}
+	// 挂起登记的成对性：awaitGate 进入 + 恢复各一次。
+	link.mu.Lock()
+	defer link.mu.Unlock()
+	if len(link.pendings) != 2 || link.pendings[0] != "+awaiting_gate" || link.pendings[1] != "-" {
+		t.Fatalf("pending 登记: %v", link.pendings)
 	}
 	// 等式：首次调用被 GATE_PENDING 拒（未执行、不计数），重发 2 次在
 	// grant 额度内直行（Part 11.2 §2.7 的"挂起不是一次调用"语义）。
 	if a.llmCallCount != 2 {
 		t.Fatalf("executed lives = %d, want 2", a.llmCallCount)
 	}
-	sawPending, sawVerdict := false, false
+	sawPending, sawVerdict, sawGateFile := false, false, false
 	for _, e := range entriesMust(t, a) {
 		if e.Role == types.RoleToolResult && strings.Contains(e.Content, "GATE_PENDING_HUMAN") {
 			sawPending = true
@@ -350,7 +340,65 @@ func TestLLMCallGatePendingGrant(t *testing.T) {
 			sawVerdict = true
 		}
 	}
-	if !sawPending || !sawVerdict {
-		t.Fatalf("pending/grant 流程缺失（pending=%v verdict=%v）", sawPending, sawVerdict)
+	// 审计面：granted_by 的授权链（Part 14.10）。
+	for _, ev := range auditEventsMust(t, a) {
+		if ev.Action != "gate_resolved" {
+			continue
+		}
+		if pm, ok := ev.Payload.(map[string]any); ok {
+			if gb, ok := pm["granted_by"]; ok && gb == "human:tester" {
+				sawGateFile = true
+			}
+		}
 	}
+	if !sawPending || !sawVerdict || !sawGateFile {
+		t.Fatalf("pending/verdict/授权链缺失（pending=%v verdict=%v granted_by=%v）", sawPending, sawVerdict, sawGateFile)
+	}
+}
+
+// TestLLMCallGateNoHumanDenied：人类 Actor 未装配 → need_human 兑现为
+// 显式拒绝（fail-closed："问不了人"不能变成"不用问"——Part 14.7）。
+func TestLLMCallGateNoHumanDenied(t *testing.T) {
+	a, _ := llmCallAgentAndFake(t, func(c *LLMCallConfig) {
+		c.Gates = gateMustManager(t, []gate.Rule{{
+			ID: "review-all", Match: map[string]string{"kind": "llm_call", "task_call_count": ">=0"},
+			Action: gate.ActionNeedHuman,
+		}})
+	})
+	a.llm = &fakeLLM{turns: []*wire.WireTurn{
+		toolCallTurn(llmCallDial()),
+		replyTurn("收到拒绝。"),
+	}}
+	if err := a.AppendUser(context.Background(), "任务"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	found := false
+	for _, e := range entriesMust(t, a) {
+		if e.Role == types.RoleToolResult && strings.Contains(e.Content, "GATE_DENIED") &&
+			strings.Contains(e.Content, "人类 Actor 未装配") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("GATE_DENIED (no human actor) feedback missing")
+	}
+	if a.gatePending != nil {
+		t.Fatal("无人类表面时不得留下挂起")
+	}
+}
+
+// auditEventsMust 读取测试 Agent 的全部审计事件（授权链断言用）。
+func auditEventsMust(t *testing.T, a *Agent) []*store.AuditEvent {
+	t.Helper()
+	if a.audit == nil {
+		return nil
+	}
+	evs, err := a.audit.Query(context.Background(), store.AuditFilter{Limit: 500})
+	if err != nil {
+		t.Fatalf("audit query: %v", err)
+	}
+	return evs
 }

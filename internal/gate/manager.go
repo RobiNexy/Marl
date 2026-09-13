@@ -1,6 +1,15 @@
 package gate
 
-// Manager：规则表评估 + grant 记账 + 人类审批（Part 11.3 的 PDP 完整形态）。
+// Manager：规则表评估 + grant 记账 + 人类裁决的兑现（Part 11.3 PDP +
+// Part 14.7 的重新定性——Gate 是"人类 Actor 的收件秘书"）。
+//
+// 阶段 12（Part 14）的结构变化：
+//   - need_human 的"问人"不再是 Manager 内的阻塞轮询（旧 FileApprover）；
+//     Manager 只产出 need_human **决策**，审批往返是 MsgGateRequest /
+//     MsgGateReply 信封（人类 Actor 的文件后端承载），裁决经 ResolveGate
+//     兑现——审批者必须是规则，不是 Actor（Part 14.7 硬边界）。
+//   - GrantAlways 的持久化由 GrantStore 承担（grants/ 目录），重启后由
+//     装配侧 LoadGrants 回插动态规则——"人类批过的 always 不丢"。
 
 import (
 	"context"
@@ -9,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"marl/internal/proto"
 	"marl/internal/store"
 	"marl/internal/types"
 )
@@ -16,13 +26,6 @@ import (
 // KindAll 是规则表通配（Part 11.3 §3.5 建议规则表带一条 kind="*" 的
 // 兜底 allow/deny；通配规则须显式书写）。
 const KindAll = Kind("*")
-
-// Approver 是 need_human 时的裁决面（审批文件 + nonce 的实现见 file.go；
-// 测试用假实现）。裁决的输出是 Grant（额度 / 永久放行规则）——Part 11.3
-// §3.3"审批的输出是 grant，不是 yes"。
-type Approver interface {
-	Ask(ctx context.Context, req *Request, rule Rule) (*Decision, Grant, error)
-}
 
 // GrantMode 是裁决的形态。
 type GrantMode string
@@ -46,26 +49,22 @@ type Grant struct {
 type ManagerConfig struct {
 	// Rules 是规则表（顺序即匹配序，首中生效）。
 	Rules []Rule
-	// Approver 非 nil 才支持 need_human；nil 时 need_human 兑现为 deny
-	//（显式拒绝：没有人类的部署里"问人"必须显式失败，不能永久挂起）。
-	Approver Approver
 	// Audit 非 nil 时记决策与 grant（原则 1 副产品）。
 	Audit store.AuditStore
 	// Now 注入（测试确定性）。
 	Now func() time.Time
-	// PersistGrant 是 GrantAlways 规则的落盘钩子（控制面；nil = 不落盘，
-	// 重启丢失——装配处/note 的失败面在 Approver 侧）。
-	PersistGrant func(ctx context.Context, rule Rule) error
+	// Grants 非 nil 时 GrantAlways 落盘（grants/ 目录；重启回插）。
+	Grants *GrantStore
 }
 
 // Manager 是 Gate 的 PDP。
 //
-// 并发：Evaluate 多 Agent 并发；状态（session grant）经 mu。
+// 并发：Decide 多 Agent 并发；状态（session grant / 动态规则）经 mu。
 type Manager struct {
 	mu    sync.Mutex
 	rules []Rule
 	// sessionGrants 是运行中的额度（AgentID × Kind → 剩余次数/token）。
-	// 装配生命周期 = 进程生命周期；"永久"级在 Approver 的落盘里。
+	// 装配生命周期 = 进程生命周期；"永久"级在 GrantStore 落盘。
 	sessionGrants map[types.AgentID]map[Kind]*grantLedger
 	cfg           ManagerConfig
 }
@@ -132,70 +131,79 @@ func (m *Manager) ValidateRules() error {
 	return nil
 }
 
-// Evaluate 是 PEP 的唯一问询入口。
+// Decide 是 PEP 的唯一问询入口（非阻塞；Part 14.7 的 GateRequest 化：
+// need_human 由调用方折算成 MsgGateRequest 发给人类 Actor 并挂起）。
 //
 // 顺序：
 //  1. session grant（先享后减——批准过的额度不需要过规则表）；
-//  2. 规则表顺序匹配（首中生效）；
-//  3. need_human → Approver；人类的裁决按 grant 形态兑现。
+//  2. 规则表顺序匹配（首中生效）。
 //
-// 决策必过审计（AgentID/Kind/rule_id/grant 形态）。
-func (m *Manager) Evaluate(ctx context.Context, req *Request) Decision {
+// 决策必过审计（AgentID/Kind/rule_id）。
+func (m *Manager) Decide(ctx context.Context, req *Request) Decision {
 	if req == nil || !req.Kind.Valid() {
 		return Decision{Action: ActionDeny, RuleID: "engine", Reason: "gate: request kind 未分类（未分类即拒绝）"}
 	}
 	if g, allowed := m.consumeGrant(req); allowed {
 		d := Decision{Action: ActionAllow, RuleID: g.addedByRule, Reason: "grant 额度内（不再打扰人类）"}
-		m.auditev(ctx, req, d, nil)
+		m.auditev(ctx, req, d, nil, "")
 		return d
 	}
 	for _, r := range m.rules {
 		if !r.Matches(req) {
 			continue
 		}
-		if r.Action == ActionNeedHuman {
-			if m.cfg.Approver == nil {
-				d := Decision{Action: ActionDeny, RuleID: r.ID,
-					Reason: ruleReason(r, "need_human 但未装配人类裁决面（Approver）——显式拒绝而非永久挂起")}
-				m.auditev(ctx, req, d, nil)
-				return d
-			}
-			d2, g, err := m.cfg.Approver.Ask(ctx, req, r)
-			if err != nil {
-				// 审批通道故障是框架级错误（上抛给 PEP，不算"业务拒绝"）。
-				dd := Decision{Action: ActionDeny, RuleID: r.ID,
-					Reason: fmt.Sprintf("gate: approver failure: %v", err)}
-				m.auditev(ctx, req, dd, nil)
-				return dd
-			}
-			// Approver 的裁决：allow（附 grant）或 deny。grant 记账当面
-			// 由 Approver 返回值承载；Always 模式在 Approver 内部落动态
-			// 规则（AddGrant 的调用)——manager 只负责审计与透传。
-			d2.RuleID = r.ID
-			// grant 记账（Part 11.3 §3.3）：allow + 非空 grant → 落账
-			// （once/count/tokens 进 session；always 插动态规则 + 落盘钩子）。
-			if g.Mode != "" && d2.Action == ActionAllow {
-				if gerr := m.AddGrant(ctx, req, g); gerr != nil {
-					fmt.Printf("marl: gate grant record failed: %v\n", gerr)
-				}
-			}
-			m.auditev(ctx, req, *d2, &g)
-			return *d2
-		}
-		d := Decision{Action: r.Action, RuleID: r.ID, Reason: r.Reason}
-		m.auditev(ctx, req, d, nil)
+		d := Decision{Action: r.Action, RuleID: r.ID, Reason: ruleReason(r, "需要人类裁决")}
+		m.auditev(ctx, req, d, nil, "")
 		return d
 	}
 	// 规则表全部未命中：拒绝（默认拒绝是"未分类"操作面最诚实的形态——
 	// 规则表里永远该有一条 * 兜底，漏了也不会静默放行）。
 	d := Decision{Action: ActionDeny, RuleID: "default-deny",
 		Reason: "没有任何规则覆盖本操作（规则表应有 kind=\"*\" 的兜底规则——漏配仍按拒绝处理）"}
-	m.auditev(ctx, req, d, nil)
+	m.auditev(ctx, req, d, nil, "")
 	return d
 }
 
-// consumeGrant 报告额度面是否允许。（Approver 的授权形态走独立通道 —
-// GrantCount / GrantTokens 的快速通道在本判据里显式对账。）
+// ResolveGate 兑现人类的 GateReply（Part 14.7 的"MsgGateReply → Agent
+// 的 Mailbox"落地步）：grant 记账 + 动态规则 + 审计，返回最终 Decision
+// （Agent 记入 Log 的对账键）。
+//
+// 凭据校验（原则 4）：reply 的 RequestID / Nonce 必须与请求一致——
+// 陈旧回放与错配回执在这里被拒（error，不静默）。
+//
+// granted_by 记录人类 ActorID（Part 14.10：授权链完整——审计 payload
+// 的 granted_by 字段）。
+func (m *Manager) ResolveGate(ctx context.Context, req *Request, reply *proto.GateReply, grantedBy types.AgentID) (Decision, error) {
+	if req == nil || reply == nil {
+		return Decision{}, fmt.Errorf("gate: resolve requires request and reply")
+	}
+	switch reply.Action {
+	case "deny":
+		d := Decision{Action: ActionDeny, RuleID: "human-deny", Reason: reply.Reason}
+		if d.Reason == "" {
+			d.Reason = "人类拒绝（MsgGateReply）"
+		}
+		m.auditev(ctx, req, d, nil, grantedBy)
+		return d, nil
+	case "allow":
+		g := Grant{Mode: GrantMode(reply.GrantMode), Count: reply.Count,
+			Tokens: reply.Tokens, Reason: reply.Reason}
+		if g.Reason == "" {
+			g.Reason = "人类放行（MsgGateReply）"
+		}
+		d := Decision{Action: ActionAllow, RuleID: "human-grant", Reason: g.Reason}
+		if err := m.AddGrant(ctx, req, g, grantedBy); err != nil {
+			return Decision{}, err
+		}
+		m.auditev(ctx, req, d, &g, grantedBy)
+		return d, nil
+	default:
+		return Decision{}, fmt.Errorf("gate: unknown reply action %q（allow | deny）", reply.Action)
+	}
+}
+
+// consumeGrant 报告额度面是否允许（先享后减；Approver 的授权形态走
+// ResolveGate 的独立通道）。
 func (m *Manager) consumeGrant(req *Request) (grantLedger, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -224,10 +232,14 @@ func (m *Manager) consumeGrant(req *Request) (grantLedger, bool) {
 	return grantLedger{}, false
 }
 
-// AddGrant 是 Approver 的授权记账入口（file.go 的裁决载体；session 级）。
+// AddGrant 是授权记账入口（ResolveGate 的兑现面；session 级）。
 //
-// GrantAlways 的语义：往规则表顶部插入一条动态 allow 规则（+ 可选落盘）。
-func (m *Manager) AddGrant(ctx context.Context, req *Request, g Grant) error {
+// GrantAlways 的语义：往规则表顶部插入一条动态 allow 规则（+ grants/
+// 落盘——重启回插，"人类批过的 always 不丢"）。
+//
+// grantedBy 是授权链的审计字段（Part 14.10；空 = 未记录——审计里如实
+// 缺失而不是编造 "unknown"）。
+func (m *Manager) AddGrant(ctx context.Context, req *Request, g Grant, grantedBy types.AgentID) error {
 	if g.Count < 0 || g.Tokens < 0 {
 		return fmt.Errorf("gate: grant 额度非法（负数）")
 	}
@@ -254,15 +266,14 @@ func (m *Manager) AddGrant(ctx context.Context, req *Request, g Grant) error {
 		m.mu.Lock()
 		m.rules = append([]Rule{rule}, m.rules...)
 		m.mu.Unlock()
-		if m.cfg.PersistGrant != nil {
-			if err := m.cfg.PersistGrant(ctx, rule); err != nil {
+		if m.cfg.Grants != nil {
+			if err := m.cfg.Grants.Save(ctx, rule, grantedBy); err != nil {
 				return fmt.Errorf("gate: persist grant rule: %w", err)
 			}
 		}
 	default:
 		return fmt.Errorf("gate: unknown grant mode %q", g.Mode)
 	}
-	m.auditev(ctx, req, Decision{Action: ActionAllow, RuleID: "grant", Reason: g.Reason}, &g)
 	return nil
 }
 
@@ -285,8 +296,9 @@ func (m *Manager) addSessionGrant(agent types.AgentID, kind Kind, g Grant, count
 }
 
 // auditev 记审计（Audit nil 跳过；写失败打 stderr——gate 的决策必须伴随
-// 审计痕迹，写失败不改变决策）。
-func (m *Manager) auditev(ctx context.Context, req *Request, d Decision, g *Grant) {
+// 审计痕迹，写失败不改变决策）。grantedBy 非空时进 payload（Part 14.10
+// 的授权链字段）。
+func (m *Manager) auditev(ctx context.Context, req *Request, d Decision, g *Grant, grantedBy types.AgentID) {
 	if m.cfg.Audit == nil {
 		return
 	}
@@ -294,6 +306,9 @@ func (m *Manager) auditev(ctx context.Context, req *Request, d Decision, g *Gran
 		"action": string(d.Action), "reason": d.Reason}
 	if g != nil {
 		payload["grant"] = string(g.Mode)
+	}
+	if grantedBy != "" {
+		payload["granted_by"] = string(grantedBy)
 	}
 	ev := &store.AuditEvent{AgentID: req.AgentID, Action: "gate_decision", Target: string(req.Kind), Payload: payload}
 	if err := m.cfg.Audit.Append(ctx, ev); err != nil {
@@ -311,50 +326,3 @@ func ruleReason(r Rule, fallback string) string {
 
 // shortReason 修剪（Reason 长度显式取上限——LLM 的回复宽预算不背锅）。
 func shortReason(s string) string { return strings.TrimSpace(s) }
-
-// Decider 是消费侧的窄面（Agent 对 PDP 的需求：非阻塞问询 + 挂起恢复
-// 时的全套评估）。
-type Decider interface {
-	// Decide 非阻塞（need_human 时不触发 Approver——agent 先回填
-	// GATE_PENDING 给模型、挂起）。
-	Decide(ctx context.Context, req *Request) Decision
-	// Evaluate 全套（挂起恢复路径： وذلك Approver 在这里启动）。
-	Evaluate(ctx context.Context, req *Request) Decision
-}
-
-// Decide 是 PEP 的**非阻塞**问询：与 Evaluate 同一枚规则表，但命中
-// need_human 时不触发 Approver——调用方把决策回填到模型（GATE_PENDING）
-// 并挂起（Blocked(AwaitingGate)），真正的"问人"发生在挂起恢复路径的
-// Evaluate（FileApprover 的文件轮询在那里运行）。
-//
-// 与 Evaluate 的分工：Evaluate 也给 PEP 用（当调用方愿意同步等裁决时）；
-// 能"先回模型再恢复"的执行点（llm_call / 编排）走 Decide——避免在任何
-// tool_call 执行的中途阻塞 eventLoop。
-func (m *Manager) Decide(ctx context.Context, req *Request) Decision {
-	if req == nil || !req.Kind.Valid() {
-		return Decision{Action: ActionDeny, RuleID: "engine", Reason: "gate: request kind 未分类"}
-	}
-	if g, allowed := m.consumeGrant(req); allowed {
-		d := Decision{Action: ActionAllow, RuleID: g.addedByRule, Reason: "grant 额度内"}
-		m.auditev(ctx, req, d, nil)
-		return d
-	}
-	for _, r := range m.rules {
-		if !r.Matches(req) {
-			continue
-		}
-		if r.Action == ActionNeedHuman && m.cfg.Approver != nil {
-			// 非阻塞面：need_human 由调用方决定何时挂起（先回填 GATE_PENDING）。
-			d := Decision{Action: ActionNeedHuman, RuleID: r.ID, Reason: ruleReason(r, "需要人类裁决")}
-			m.auditev(ctx, req, d, nil)
-			return d
-		}
-		d := Decision{Action: r.Action, RuleID: r.ID, Reason: r.Reason}
-		m.auditev(ctx, req, d, nil)
-		return d
-	}
-	d := Decision{Action: ActionDeny, RuleID: "default-deny",
-		Reason: "没有任何规则覆盖本操作（规则表应有 kind=\"*\" 的兜底规则——漏配仍按拒绝处理）"}
-	m.auditev(ctx, req, d, nil)
-	return d
-}

@@ -165,10 +165,20 @@ func renderStatusColored(w io.Writer, evs []*store.AuditEvent, color bool) {
 			// 单测/内存事件可能是 int——统一走 numberOf。
 			d := payloadMap(ev.Payload)
 			child := get(types.AgentID(ev.Target))
+			// 请求者也入行（Part 14.6：requester 可以是人类 Actor——
+			// 监督树以人类为根；行的 state 由 agent_state/actor_registered
+			// 事件补齐，缺省"未运行"）。
+			get(ev.AgentID)
 			if d != nil {
 				child.parent = ev.AgentID
 				child.depth = numberOf(d["depth"])
 			}
+		case "actor_registered":
+			// 统一 Actor 面（Part 14.2 #2）：人类/装配 Agent 的注册行
+			//（人类是监督树的根——depth=0 的拓扑事实）。
+			d := payloadMap(ev.Payload)
+			row := get(ev.AgentID)
+			row.depth = numberOf(d["depth"])
 		}
 	}
 	// 树排序：按 depth 升序、同 depth 按 ID。
@@ -261,8 +271,12 @@ func printTree(w io.Writer, a *agentStatus, agents map[types.AgentID]*agentStatu
 	for i := 0; i < depth; i++ {
 		indent += "   └─ "
 	}
+	// 图标按 ActorID 前缀（呈现层专用——Part 14.2 纪律 1 的"Kind 只管
+	// 渲染"在 CLI 面的形态；权限判断不在此处）。
 	prefix := "🤖"
-	if depth > 0 {
+	if strings.HasPrefix(string(a.ID), "human:") {
+		prefix = "👤"
+	} else if depth > 0 {
 		prefix = "🔧"
 	}
 	fmt.Fprintf(w, "%s%s %s (depth=%d) %s\n", indent, prefix, a.ID, a.depth, colorizeState(color, a.stateLine()))
