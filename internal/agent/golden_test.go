@@ -35,6 +35,20 @@ func TestGoldenIntentSchemas(t *testing.T) {
 	}
 }
 
+// TestIntentSchemasValidJSON：每个意图工具的 Parameters 必须是**合法 JSON**。
+//
+// 回归面：schemaSpawnBatch 曾缺一个右括号（截断的非法 JSON），真跑在
+// wire encode 即失败，而 dry-run（假 LLM 不编码工具表）与上面的 golden
+// （只锁顺序与名字）都探不到——合法性是 golden 覆盖之外独立的一根金针。
+// [阶段 11 修正实测记录：fossil 2.26 / Go 1.27 的真机复现]。
+func TestIntentSchemasValidJSON(t *testing.T) {
+	for _, tool := range intentSchemas() {
+		if !json.Valid(tool.Parameters) {
+			t.Errorf("tool %q: Parameters 不是合法 JSON（截断或括号失衡的 schema 会让真跑在编码期崩溃）", tool.Name)
+		}
+	}
+}
+
 func structsOf(jsonText string) []string {
 	var wrap []map[string]string
 	if err := json.Unmarshal([]byte(jsonText), &wrap); err != nil {

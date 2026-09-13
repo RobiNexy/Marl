@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -86,6 +87,12 @@ func runKnowledgePromote(args []string) error {
 	marlDir := filepath.Join(*dir, ".marl")
 	hash, err := knowledge.Promote(context.Background(), cli, marlDir, g, rel)
 	if err != nil {
+		// 全局库已有逐字节相同的内容 → 幂等成功，不是失败（无新 commit
+		// = 没有任何语义变化；退出码 1 会让脚本把它当故障处理）。
+		if errors.Is(err, fossil.ErrNothingToCommit) {
+			fmt.Printf("%s 内容未变，全局库已是最新（未新提交）\n", rel)
+			return nil
+		}
 		return err
 	}
 	fmt.Printf("已提升 %s 到全局库（commit %s，author=human）\n", rel, hash)

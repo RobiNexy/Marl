@@ -157,9 +157,9 @@ func (a *Agent) intentLLMCall(ctx context.Context, call types.ToolCall) (*skill.
 	}
 
 	// ---- wire 解析（main = 活引用） ----
-	exec, binding, err2 := a.llmCallWire(&args)
-	if err2 != nil {
-		return nil, err2
+	exec, binding, bad := a.llmCallWire(&args)
+	if bad != nil {
+		return bad, nil // WIRE_NOT_FOUND / MODEL_NOT_IN_CATALOG 是业务结果（可改参数重试）
 	}
 	// ---- 归一化与调用 ----
 	turn, err := a.llmCallRunner(ctx, exec, binding, &args)
@@ -216,7 +216,7 @@ func (nilPDP) Decide(ctx context.Context, req *gate.Request) gate.Decision {
 //
 // model 覆盖校验：catalog 面（AllowModels）；缺 catalog 语义 = 装配面没有
 // 模型清单 → 拒（自铸目录没有意义——Part 11.2 §2.4 的"不合法覆盖"）。
-func (a *Agent) llmCallWire(args *llmCallArgs) (LLMExecutor, types.Binding, error) {
+func (a *Agent) llmCallWire(args *llmCallArgs) (LLMExecutor, types.Binding, *skill.SkillResult) {
 	name := args.Wire
 	if name == "" {
 		name = "main"
@@ -229,19 +229,23 @@ func (a *Agent) llmCallWire(args *llmCallArgs) (LLMExecutor, types.Binding, erro
 		var ok bool
 		ex, b, ok = a.llmCallCfg.Wires.Resolve(a2Ctx(), name)
 		if !ok {
-			return nil, types.Binding{}, wireNotFoundErr(name, a.llmCallCfg.Wires.Names())
+			return nil, types.Binding{}, skill.NewFailure(ErrCodeWireNotFound,
+				"wire=%q 不存在（可用：%s）", name, strings.Join(a.llmCallCfg.Wires.Names(), ", "))
 		}
 	} else {
-		return nil, types.Binding{}, wireNotFoundErr(name, []string{"main"})
+		return nil, types.Binding{}, skill.NewFailure(ErrCodeWireNotFound,
+			"wire=%q 不存在（可用：%s）", name, "main")
 	}
 	// model 覆盖（sidecar 的 catalog 内换模型重试；校验在 AllowModels 面）。
 	if args.Model != "" && args.Model != b.Model {
 		if a.llmCallCfg.Wires == nil {
-			return nil, types.Binding{}, modelNotInCatalogErr(args.Model, []string{b.Model})
+			return nil, types.Binding{}, skill.NewFailure(ErrCodeModelNotInCatalog,
+				"model=%q 不在 catalog 内（该 wire 可用：%s）", args.Model, b.Model)
 		}
 		all, ok := a.llmCallCfg.Wires.AllowModels()
 		if !ok || !containsStr(all, args.Model) {
-			return nil, types.Binding{}, modelNotInCatalogErr(args.Model, all)
+			return nil, types.Binding{}, skill.NewFailure(ErrCodeModelNotInCatalog,
+				"model=%q 不在 catalog 内（该 wire 可用：%s）", args.Model, strings.Join(all, ", "))
 		}
 		b.Model = args.Model
 	}
@@ -359,18 +363,7 @@ func llmCallResultOf(turn *wire.WireTurn) *skill.SkillResult {
 	return skill.NewSuccess(map[string]any{"content": out})
 }
 
-// wireNotFoundErr / modelNotInCatalogErr / containsStr 是 llm_call 的错误
-// 码协议（Part 11.2 §2.9：消息列出全部可用 wire / 可用 model——LLM 靠
-// 具体可选项修正）。
-func wireNotFoundErr(got string, all []string) error {
-	return fmt.Errorf("%s: wire=%q 不存在（可用：%s）", ErrCodeWireNotFound, got, strings.Join(all, ", "))
-}
-
-func modelNotInCatalogErr(got string, all []string) error {
-	return fmt.Errorf("%s: model=%q 不在 catalog 内（该 wire 可用：%s）",
-		ErrCodeModelNotInCatalog, got, strings.Join(all, ", "))
-}
-
+// containsStr 是 catalog 面的成员判定（model 覆盖的合法性）。
 func containsStr(all []string, want string) bool {
 	for _, s := range all {
 		if s == want {

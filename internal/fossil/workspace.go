@@ -65,6 +65,29 @@ func (c *CLI) Status(ctx context.Context, workdir string) ([]Change, error) {
 	return out, nil
 }
 
+// Update 把 checkout 物化到仓库 tip（`fossil update`；写命令）。
+//
+// 存在理由：OpenRepo 始终带 -k（保持本地文件不变——init 场景防覆盖工作区），
+// 代价是 checkout 里**已跟踪文件不落盘**。"打开一个空临时目录 → 在里面
+// 提交"的调用方（如 vendoring 的 temp checkout）必须先物化 tip，否则
+// commit 会因已跟踪文件缺失而失败（实测：fossil 报 "not found: no such
+// file: <workdir>/<已跟踪路径>"）。
+//
+// 空仓库（无 check-in）安全：update 无事可做，不报错。
+//
+// --nosync：update 默认 autosync（联网 pull）——本框架的库都是本地文件；
+// -U UserSystem：update 即使 --nosync 也要求用户身份（实测记录）——机械
+// 物化不是提交，用 system 身份，不冒充 human/agent。
+//
+// 失败：未 open → ErrNotOpen。
+func (c *CLI) Update(ctx context.Context, workdir string) error {
+	_, err := c.runWrite(ctx, workdir, "update", "--nosync", "-U", UserSystem)
+	if err != nil {
+		return fmt.Errorf("fossil update: %w", err)
+	}
+	return nil
+}
+
 // Add 把路径加入本次提交（`fossil add`；目录递归，. 开头文件默认跳过——
 // fossil 默认行为，ignore-glob 在这一层生效：SKIP 而非 ADDED）。
 //

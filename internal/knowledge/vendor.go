@@ -48,6 +48,9 @@ type VCS interface {
 	Timeline(ctx context.Context, repoPath string, n int) ([]fossil.TimelineEntry, error)
 	OpenRepo(ctx context.Context, repoPath, workdir string) error
 	CloseRepo(ctx context.Context, workdir string) error
+	// Update 把 checkout 物化到 tip（OpenRepo 的 -k 语义不落已跟踪文件；
+	// temp checkout 在写入前必须先物化，否则 commit 因已跟踪文件缺失失败）。
+	Update(ctx context.Context, workdir string) error
 	Add(ctx context.Context, workdir string, relPaths ...string) error
 	Commit(ctx context.Context, workdir, author, message string) (string, error)
 	// Cat 在 checkout 状态下读文件（RunCat 的全局形态：检查版本参数由
@@ -156,6 +159,11 @@ func Promote(ctx context.Context, cli VCS, marlDir, globalRepo, relPath string) 
 		return "", fmt.Errorf("vendor: open global for promote: %w", err)
 	}
 	defer cli.CloseRepo(ctx, tmp)
+	// 物化 tip（OpenRepo 的 -k 不落已跟踪文件；全局库非空时 commit 会因
+	// 缺文件而失败——回归测试 TestPromoteToNonEmptyGlobalRepo 锁此行为）。
+	if err := cli.Update(ctx, tmp); err != nil {
+		return "", fmt.Errorf("vendor: promote update: %w", err)
+	}
 	dst := filepath.Join(tmp, filepath.FromSlash(relPath))
 	if dirErr := os.MkdirAll(filepath.Dir(dst), 0o755); dirErr != nil {
 		return "", dirErr

@@ -86,6 +86,55 @@ func TestPullThenPromoteRoundtrip(t *testing.T) {
 	}
 }
 
+// TestPromoteToNonEmptyGlobalRepo：第二次 promote（全局库已非空）必须成功。
+//
+// 回归面：OpenRepo 始终带 -k（不物化已跟踪文件），temp checkout 里缺文件
+// 时 fossil commit 报 "not found: no such file"——修复是 Promote 前先
+// Update 物化 tip（真机实测记录：fossil 2.26）。
+func TestPromoteToNonEmptyGlobalRepo(t *testing.T) {
+	cli, err := fossil.NewCLI("")
+	if err != nil {
+		t.Skipf("fossil: %v", err)
+	}
+	global := setupGlobalRepo(t)
+	mkProj := func(name, rel, body string) string {
+		t.Helper()
+		dir := filepath.Join(t.TempDir(), ".marl")
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(rel)), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	ctx := context.Background()
+	// 第一次 promote：全局库空 → 直接入库（既有通过面，不许回归）。
+	if _, err := Promote(ctx, cli, mkProj("a", "knowledge/contracts/first.md", "first\n"), global, "knowledge/contracts/first.md"); err != nil {
+		t.Fatalf("first promote: %v", err)
+	}
+	// 第二次 promote：全局库非空 → 必须成功（物化修复的验证点）。
+	hash, err := Promote(ctx, cli, mkProj("b", "knowledge/contracts/second.md", "second\n"), global, "knowledge/contracts/second.md")
+	if err != nil {
+		t.Fatalf("second promote (non-empty global): %v", err)
+	}
+	if hash == "" {
+		t.Fatal("second promote must return commit hash")
+	}
+	// 全局库两条目 → pull 全量登记。
+	proj := filepath.Join(t.TempDir(), ".marl")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := Pull(ctx, cli, proj, global)
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("pull entries: %+v", entries)
+	}
+}
+
 // TestPullEmptyGlobal：全局库空 → 显式报错（"全局无知识"是配置问题，
 // 不是静默空集）。
 func TestPullEmptyGlobal(t *testing.T) {

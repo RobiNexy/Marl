@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"marl/internal/ledger"
@@ -174,5 +175,182 @@ func (stubCatalog) Ladder() *types.Ladder {
 	return &types.Ladder{
 		Rungs: []types.Rung{{ID: "r0", Endpoint: "sidecar-endpoint", Model: "sidecar-model", CostPerMTok: 1, Currency: "CNY"}},
 		Start: "r0",
+	}
+}
+
+// TestLLMCallInputTooLarge：单次输入上限硬拒——消息里必须带两个数字
+// （实际 token 数与上限；Part 11.2 §2.9 的消息纪律）。
+func TestLLMCallInputTooLarge(t *testing.T) {
+	ctx := context.Background()
+	a, _ := llmCallAgentAndFake(t, func(c *LLMCallConfig) {
+		c.Gates = gateMustManager(t, []gate.Rule{{
+			ID: "allow-under", Match: map[string]string{"kind": "llm_call"}, Action: gate.ActionAllow,
+		}}, nil)
+	})
+	huge := llmCallDial()
+	var args llmCallArgs
+	_ = json.Unmarshal(huge.Arguments, &args)
+	args.Messages[1].Content = strings.Repeat("x", 500)
+	b, _ := json.Marshal(args)
+	huge.Arguments = b
+	a.llm = &fakeLLM{turns: []*wire.WireTurn{
+		toolCallTurn(huge),
+		replyTurn("收到拒绝，拆小后重调。"),
+	}}
+	if err := a.AppendUser(ctx, "任务"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	found := ""
+	for _, e := range entriesMust(t, a) {
+		if e.Role == types.RoleToolResult && strings.Contains(e.Content, "INPUT_TOO_LARGE") {
+			found = e.Content
+		}
+	}
+	if found == "" {
+		t.Fatal("INPUT_TOO_LARGE feedback missing")
+	}
+	if !strings.Contains(found, "521") || !strings.Contains(found, "200") {
+		t.Fatalf("numbers missing: %s", found)
+	}
+	// 硬拒不计入调用次数也不写账本（物理 sanity 不是一次"调用"）。
+	if a.llmCallCount != 0 || a.llmCallTokens != 0 {
+		t.Fatalf("counter leak: %d/%d", a.llmCallCount, a.llmCallTokens)
+	}
+}
+
+// TestLLMCallWireNotFound：wire 名不存在的错误消息**列出全部可用 wire**。
+func TestLLMCallWireNotFound(t *testing.T) {
+	ctx := context.Background()
+	a, _ := llmCallAgentAndFake(t, func(c *LLMCallConfig) {
+		c.Gates = gateMustManager(t, []gate.Rule{{
+			ID: "allow-under", Match: map[string]string{"kind": "llm_call"}, Action: gate.ActionAllow,
+		}}, nil)
+	})
+	call := llmCallDial()
+	var args llmCallArgs
+	_ = json.Unmarshal(call.Arguments, &args)
+	args.Wire = "sidecar-typo"
+	b, _ := json.Marshal(args)
+	call.Arguments = b
+	a.llm = &fakeLLM{turns: []*wire.WireTurn{
+		toolCallTurn(call),
+		replyTurn("改用正确 wire。"),
+	}}
+	if err := a.AppendUser(ctx, "任务"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	found := false
+	for _, e := range entriesMust(t, a) {
+		if e.Role == types.RoleToolResult &&
+			strings.Contains(e.Content, "WIRE_NOT_FOUND") &&
+			strings.Contains(e.Content, "main") && strings.Contains(e.Content, "sidecar") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("wire list feedback missing")
+	}
+}
+
+// TestLLMCallModelNotInCatalog：model 覆盖不在 AllowModels → 拒且列出。
+func TestLLMCallModelNotInCatalog(t *testing.T) {
+	ctx := context.Background()
+	a, _ := llmCallAgentAndFake(t, func(c *LLMCallConfig) {
+		c.Gates = gateMustManager(t, []gate.Rule{{
+			ID: "allow-under", Match: map[string]string{"kind": "llm_call"}, Action: gate.ActionAllow,
+		}}, nil)
+	})
+	call := llmCallDial()
+	var args llmCallArgs
+	_ = json.Unmarshal(call.Arguments, &args)
+	args.Model = "unknown-strong"
+	b, _ := json.Marshal(args)
+	call.Arguments = b
+	a.llm = &fakeLLM{turns: []*wire.WireTurn{
+		toolCallTurn(call),
+		replyTurn("换 catalog 内模型。"),
+	}}
+	if err := a.AppendUser(ctx, "任务"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	found := false
+	for _, e := range entriesMust(t, a) {
+		if e.Role == types.RoleToolResult &&
+			strings.Contains(e.Content, "MODEL_NOT_IN_CATALOG") &&
+			strings.Contains(e.Content, "sidecar-model") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("catalog list feedback missing")
+	}
+}
+
+// TestLLMCallGatePendingGrant：need_human（task_call_count>=20 的字面规则）
+// → GATE_PENDING_HUMAN 回填 → Run 外层 Blocked(AwaitingGate) → 审批 grant
+// (count=2) → 模型重发直行（额度内不再打扰人类——Part 11.3 §3.3 的"问
+// 一次给一批"）。
+func TestLLMCallGatePendingGrant(t *testing.T) {
+	asks := 0
+	approver := func(*gate.Request) (*gate.Decision, gate.Grant) {
+		asks++
+		return &gate.Decision{Action: gate.ActionAllow, Reason: "人类放行"},
+			gate.Grant{Mode: gate.GrantCount, Count: 2}
+	}
+	// base llm 无 sidecar 执行（用 llmCallAgentAndFake 的 hook 面：主 fake
+	// 的 llm_call 走真实的 WireSet——用 sidecar 执行器；挂起后重发两次直行）。
+	sidecarTurns := func() *wire.WireTurn { return nil }
+	_ = sidecarTurns
+	a, _ := llmCallAgentAndFake(t, func(c *LLMCallConfig) {
+		// 规则：第一次（count=0）就 need_human（>=0），审批→count=2 的额度。
+		c.Gates = gateMustManager(t, []gate.Rule{{
+			ID:     "review-all",
+			Match:  map[string]string{"kind": "llm_call", "task_call_count": ">=0"},
+			Action: gate.ActionNeedHuman,
+			Reason: "测试：每次都要人",
+		}}, approver)
+	})
+	first := llmCallDial()
+	a.llm = &fakeLLM{turns: []*wire.WireTurn{
+		toolCallTurn(first), // 第一次 → pending
+		toolCallTurn(first), // 重发（grant 额度内直行）
+		toolCallTurn(first), // 再发（2 次额度内的第二次直行）
+		replyTurn("三次调用完成。"),
+	}}
+	ctx := context.Background()
+	if err := a.AppendUser(ctx, "任务"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if asks != 1 {
+		t.Fatalf("human asked %d 次——额度内不应再问（Part 11.3 §3.3）", asks)
+	}
+	// 等式：首次调用被 GATE_PENDING 拒（未执行、不计数），重发 2 次在
+	// grant 额度内直行（Part 11.2 §2.7 的"挂起不是一次调用"语义）。
+	if a.llmCallCount != 2 {
+		t.Fatalf("executed lives = %d, want 2", a.llmCallCount)
+	}
+	sawPending, sawVerdict := false, false
+	for _, e := range entriesMust(t, a) {
+		if e.Role == types.RoleToolResult && strings.Contains(e.Content, "GATE_PENDING_HUMAN") {
+			sawPending = true
+		}
+		if e.Role == types.RoleHumanNote && strings.Contains(e.Content, "Gate 裁决") {
+			sawVerdict = true
+		}
+	}
+	if !sawPending || !sawVerdict {
+		t.Fatalf("pending/grant 流程缺失（pending=%v verdict=%v）", sawPending, sawVerdict)
 	}
 }

@@ -52,6 +52,10 @@ const (
 		`"temperature":{"type":"number"},` +
 		`"purpose":{"type":"string","description":"bookkeeping label only (not authorization)"}},"required":["messages"]}`
 
+	// [缓存注记] 2026-09-13 修复：items 属性对象少一个右括号（schema 从
+	// 写下起就是截断的非法 JSON——真跑在 wire encode 即报"Parameters 不
+	// 是合法 JSON"，dry-run 与 golden 只锁字节稳定所以未暴露）。旧字节从未
+	// 产出过一次成功的真跑调用，前缀失效成本为零。
 	schemaSpawnBatch = `{"type":"object","properties":{` +
 		`"items":{"type":"array","items":{"type":"object","properties":{` +
 		`"profile_id":{"type":"string","description":"Profile id of the child agent"},` +
@@ -59,7 +63,7 @@ const (
 		`"writable_paths":{"type":"array","items":{"type":"string"},"description":"Glob paths the child may write; MUST be a subset of your own writable scope"},` +
 		`"readable_paths":{"type":"array","items":{"type":"string"},"description":"Optional extra readable globs"},` +
 		`"prompt_override":{"type":"string","description":"Optional prompt id overriding the profile default"},` +
-		`"inject_message_seqs":{"type":"array","items":{"type":"integer"},"description":"Optional seq numbers of your log entries to inject"}}},` +
+		`"inject_message_seqs":{"type":"array","items":{"type":"integer"},"description":"Optional seq numbers of your log entries to inject"}}}},` +
 		`"await":{"type":"string","enum":["all","any","n"],"description":"Resume you after all children report (default), after any one, or after n"},` +
 		`"n":{"type":"integer","description":"Resume threshold when await=n (1..len(items))"}},"required":["items"]}`
 )
