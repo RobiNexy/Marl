@@ -19,12 +19,16 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
           mkdir -p dist
-          for osarch in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64; do
+          for osarch in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64 android-arm64; do
             os=${osarch%-*}; arch=${osarch#*-}
             ext=""; [ "$os" = "windows" ] && ext=".exe"
-            go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
+            CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
               -o dist/marl-$VERSION-$os-$arch$ext ./cmd/marl
           done
+          # 校验和（安装脚本与使用者的完整性验证面）。
+          ( cd dist && sha256sum marl-* > checksums.txt )
+          # 安装脚本随 release 分发（curl | sh 的一键入口）。
+          cp scripts/install.sh dist/install.sh
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:

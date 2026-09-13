@@ -234,6 +234,23 @@ func (c *HTTPClient) ReplyDiscussion(id, annotation string, approve bool) error 
 		map[string]any{"annotation": annotation, "approve": approve}, nil)
 }
 
+// Escalations 列待回复求助。
+func (c *HTTPClient) Escalations() ([]contract.EscalationView, error) {
+	var out struct {
+		Escalations []contract.EscalationView `json:"escalations"`
+	}
+	if err := c.do("GET", "/api/v1/escalations", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Escalations, nil
+}
+
+// ReplyEscalation 回复求助（daemon 写 done/ 并归档——与手编同一通道）。
+func (c *HTTPClient) ReplyEscalation(id, reply string) error {
+	return c.do("POST", "/api/v1/escalations/"+id+"/reply",
+		map[string]string{"reply": reply}, nil)
+}
+
 // ConfigRaw 读配置原文。
 func (c *HTTPClient) ConfigRaw() ([]byte, error) {
 	resp, err := c.hc.Get(c.base + "/api/v1/config")

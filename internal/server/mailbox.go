@@ -59,6 +59,16 @@ func (m *FileMailbox) ReplyDiscussion(id, annotation string, approve bool) error
 	return m.lf.ReplyDiscussion(id, annotation, approve)
 }
 
+// Escalations 列出待回复求助（文件面）。
+func (m *FileMailbox) Escalations() ([]contract.EscalationView, error) {
+	return m.lf.Escalations()
+}
+
+// ReplyEscalation 写回复并归档到 done/（文件面）。
+func (m *FileMailbox) ReplyEscalation(id, reply string) error {
+	return m.lf.ReplyEscalation(id, reply)
+}
+
 // ConfigRaw / WriteConfig / ProfileRaw / WriteProfile / KnowledgeLint /
 // KnowledgePromote / KnowledgePull / Doctor（文件面，委托 LocalFiles）。
 func (m *FileMailbox) ConfigRaw() ([]byte, error) { return m.lf.ConfigRaw() }

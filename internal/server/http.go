@@ -188,6 +188,29 @@ func (a *App) Handler() http.Handler {
 		writeJSON(w, 200, map[string]any{"replied": true})
 	}))
 
+	// --- Escalations (requests/pending → done 通道) ---
+	mux.HandleFunc("GET /api/v1/escalations", a.h(func(w http.ResponseWriter, _ *http.Request) {
+		evs, err := a.Escalations()
+		if err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"escalations": evs})
+	}))
+	mux.HandleFunc("POST /api/v1/escalations/{id}/reply", a.h(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Reply string `json:"reply"`
+		}
+		if !readBody(w, r, &body) {
+			return
+		}
+		if err := a.ReplyEscalation(r.PathValue("id"), body.Reply); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"replied": true})
+	}))
+
 	// --- 配置与知识 ---
 	mux.HandleFunc("GET /api/v1/config", a.h(func(w http.ResponseWriter, _ *http.Request) {
 		raw, err := a.ConfigRaw()

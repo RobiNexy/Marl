@@ -33,6 +33,7 @@ commands:
   say "文本"               人类 → Actor 的直接消息（MsgDirect）
   stop                     优雅停止后台任务（--force 强杀）
   serve                    本机守护进程（REST + SSE；GUI 的接入口）
+  tui                      终端仪表盘（bubbletea；监督树/审批/成本）
   doctor                   环境自检（fossil / API key / 骨架 / store）
   version                  构建信息`
 
@@ -64,6 +65,8 @@ func main() {
 		err = cmdStop(args)
 	case "serve":
 		err = cmdServe(args)
+	case "tui":
+		err = cmdTui(args)
 	case "version":
 		err = cmdVersion(args)
 	case "doctor":

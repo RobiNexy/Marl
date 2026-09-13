@@ -732,6 +732,12 @@ func (a *App) ReplyDiscussion(id, annotation string, approve bool) error {
 	return a.lf.ReplyDiscussion(id, annotation, approve)
 }
 
+// Escalations 列出待人类回复的求助（委托 LocalFiles）。
+func (a *App) Escalations() ([]contract.EscalationView, error) { return a.lf.Escalations() }
+
+// ReplyEscalation 回复一条求助并归档（委托 LocalFiles——GUI 是"人类的笔"）。
+func (a *App) ReplyEscalation(id, reply string) error { return a.lf.ReplyEscalation(id, reply) }
+
 // ConfigRaw 返回 config.yaml 原文（委托 LocalFiles）。
 func (a *App) ConfigRaw() ([]byte, error) { return a.lf.ConfigRaw() }
 

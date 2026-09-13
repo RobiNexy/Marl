@@ -29,11 +29,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goos: [linux, darwin, windows]
+        goos: [linux, darwin, windows, android]
         goarch: [amd64, arm64]
         exclude:
           - goos: windows
             goarch: arm64
+          - goos: android
+            goarch: amd64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -45,6 +47,9 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          # CGO 全关：modernc sqlite 是纯 Go；跨平台构建不依赖目标平台工具链
+          #（android 无 NDK 也能出产物——termux 直跑）。
+          CGO_ENABLED: 0
       - uses: actions/upload-artifact@v4
         with:
           name: marl-${{ matrix.goos }}-${{ matrix.goarch }}

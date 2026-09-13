@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/RobiNexy/Marl/internal/agent"
+	"github.com/RobiNexy/Marl/internal/store"
 	"github.com/RobiNexy/Marl/internal/contract"
 	"github.com/RobiNexy/Marl/internal/types"
 	"github.com/RobiNexy/Marl/internal/wire"
@@ -476,8 +477,22 @@ func driveContractScenario(t *testing.T, impl contract.Interaction, fileOnly boo
 	if md, err := impl.ConversationMarkdown(ctx, "sub_000001"); err != nil || !strings.Contains(md, "### Agent") {
 		t.Fatalf("ConversationMarkdown: %v", err)
 	}
-	if costs, err := impl.Costs(ctx, "start-task"); err != nil || costs == nil {
-		t.Fatalf("Costs: %v", err)
+	// Costs 带轮询：human_note 落 Log（上面的对话断言通过）与该轮 LLM 调用
+	// 记入 ledger 之间存在异步窗口（note 消费 → 编排 → ExecuteTurn 完成 →
+	// 记账）。契约断言的是"账单有出口且能汇总到本次任务"，不是记账时序——
+	// 高负载下（全仓 -race 并行）固定时序会 flaky，故按 deadline 轮询。
+	var costs *store.TaskCostSummary
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		var cerr error
+		costs, cerr = impl.Costs(ctx, "start-task")
+		if cerr == nil && costs != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Costs: %v (deadline exceeded)", cerr)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	// 事件游标。
 	if evs, err := impl.Events(ctx, 0, 100); err != nil || len(evs) == 0 {

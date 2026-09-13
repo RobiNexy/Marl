@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // verdict 是一次解析后的 verdict 内容（收笔后的整文件）。
@@ -64,6 +66,9 @@ func parseVerdict(content string) (*verdict, error) {
 		return nil, fmt.Errorf("verdict: nonce missing in frontmatter")
 	}
 	v.body = strings.Join(lines[end+1:], "\n")
+	// 协议标记是管道不是内容（结构化前端的"写完"声明不应作为批注进入
+	// agent 上下文——escalate.replyOf 同纪律）。
+	v.body = strings.ReplaceAll(v.body, types.ReplyFinalMarker, "")
 	return v, nil
 }
 
@@ -173,17 +178,32 @@ func (m *Manager) Wait(ctx context.Context, sess *Session) (Outcome, error) {
 		if err != nil {
 			continue // 不存在 / 读取故障：人类还没写或权限未恢复
 		}
-		if mt := st.ModTime(); mt != lastMod {
-			lastMod = mt
-			lastChange = time.Now()
-			continue // 刚变过：起静默窗口
-		}
-		if lastChange.IsZero() || time.Since(lastChange) < m.cfg.Quiescence {
-			continue // 未收笔
-		}
 		content, rerr := os.ReadFile(path)
 		if rerr != nil {
 			continue
+		}
+		// 快路径（types.ReplyFinalMarker）：结构化裁决（TUI/API 写入）
+		// 带声明"内容完整且最终" → 免静默窗立即消费。人类手工编辑无
+		// 标记 → 慢路径静默窗照旧。撕裂自愈：截断的标记落回慢路径。
+		final := types.HasReplyFinal(string(content))
+		if mt := st.ModTime(); mt != lastMod {
+			lastMod = mt
+			lastChange = time.Now()
+			if final {
+				if o, ok := waitOnce(&m.cfg, sess, content, time.Now()); ok {
+					return o, nil
+				}
+			}
+			continue // 刚变过：起静默窗口（无标记时）
+		}
+		if final {
+			if o, ok := waitOnce(&m.cfg, sess, content, time.Now()); ok {
+				return o, nil
+			}
+			continue // 声明在但凭据/形态不匹配：与"编辑中间态"同等留观
+		}
+		if lastChange.IsZero() || time.Since(lastChange) < m.cfg.Quiescence {
+			continue // 未收笔
 		}
 		if o, ok := waitOnce(&m.cfg, sess, content, time.Now()); ok {
 			return o, nil

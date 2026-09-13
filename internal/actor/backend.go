@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/types"
 	"github.com/RobiNexy/Marl/internal/store"
 )
 
@@ -313,6 +314,11 @@ func quietFor(fileType string, base time.Duration) time.Duration {
 }
 
 // consider 对单个文件做静默窗判定与解析（状态经 seenMod/seenFirst）。
+//
+// 双速路径（types.ReplyFinalMarker 协议）：
+//   - 快路径：内容带"写完"声明（结构化前端写入=提交即最终）→ 静默窗
+//     未满也立即消费。撕裂自愈：写入截断 → 标记不完整 → 落回慢路径。
+//   - 慢路径：无标记（人类就地编辑）→ 静默窗照旧。
 func (b *FileBackend) consider(name string) {
 	path := filepath.Join(b.inboxDir(), name)
 	st, err := os.Stat(path)
@@ -327,15 +333,24 @@ func (b *FileBackend) consider(name string) {
 		b.seenFirst[name] = time.Now()
 		return // 静默窗重新计时
 	}
-	if first.IsZero() || time.Since(first) < quietFor(fileTypeOf(name), b.quiet) {
-		return // 静默中
-	}
 	content, rerr := os.ReadFile(path)
 	if rerr != nil {
 		return
 	}
-	env, consumed := b.parse(string(content))
-	if !consumed {
+	if first.IsZero() || time.Since(first) < quietFor(fileTypeOf(name), b.quiet) {
+		if types.HasReplyFinal(string(content)) {
+			b.consume(name, content) // 快路径：声明完整且最终
+		}
+		return // 无标记：静默中
+	}
+	b.consume(name, content)
+}
+
+// consume 是消费路径的收口（解析→归档→投递；consider 的快慢两条路径
+// 汇入此处——exactly-once 语义的实现点）。
+func (b *FileBackend) consume(name string, content []byte) {
+	env, ok := b.parse(string(content))
+	if !ok {
 		return // 纯投递形态 / 未裁决 / 凭据不匹配：继续留观
 	}
 	// 先归档再投递（可见即已消费的 exactly-once 语义：信封出现在读端的

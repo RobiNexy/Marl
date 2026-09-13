@@ -158,16 +158,33 @@ func (m *Mailbox) WaitReply(ctx context.Context, f *EscalationFile) (string, err
 		if err != nil {
 			continue // 未移动 / 权限未恢复：继续等（控制面在人类手上，自愈）
 		}
+		content, rerr := os.ReadFile(path)
+		if rerr != nil {
+			continue
+		}
+		// 快路径（types.ReplyFinalMarker）：结构化回复（TUI/API 一次性
+		// 落盘）带"写完"声明 → 免静默窗。人类手工移动+编辑无标记 → 慢
+		// 路径照旧。撕裂自愈：截断标记落回慢路径。
+		final := types.HasReplyFinal(string(content))
 		if mt := st.ModTime(); mt != modSeen {
 			modSeen = mt
 			firstSeen = time.Now()
+			if final {
+				if reply, ok := replyOf(string(content), f.Nonce); ok {
+					m.audit(f.Req.From, "escalation_reply_received", string(f.ID), nil)
+					return reply, nil
+				}
+			}
 			continue
+		}
+		if final {
+			if reply, ok := replyOf(string(content), f.Nonce); ok {
+				m.audit(f.Req.From, "escalation_reply_received", string(f.ID), nil)
+				return reply, nil
+			}
+			continue // 声明在但凭据不匹配：留观（原则 4 的对账不变）
 		}
 		if firstSeen.IsZero() || time.Since(firstSeen) < m.cfg.Quiescence {
-			continue
-		}
-		content, rerr := os.ReadFile(path)
-		if rerr != nil {
 			continue
 		}
 		reply, ok := replyOf(string(content), f.Nonce)
@@ -213,6 +230,9 @@ func replyOf(content, wantNonce string) (string, bool) {
 	if i := strings.Index(body, "## 回复"); i >= 0 {
 		body = strings.TrimSpace(body[i+len("## 回复"):])
 	}
+	// 协议标记是管道不是内容（agent 的上下文里不应出现 HTML 注释形态的
+	// 协议字节——契约测试 escalation_test 锚定此行为）。
+	body = strings.TrimSpace(strings.ReplaceAll(body, types.ReplyFinalMarker, ""))
 	return body, true
 }
 

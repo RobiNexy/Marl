@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // fastConfig 是测试装配（轮询参数照注释的说明缩小）。
@@ -221,4 +223,46 @@ func TestApproveEchoInTemplate(t *testing.T) {
 		t.Fatalf("template text alone must not approve: %+v", o)
 	}
 	_ = o
+}
+
+// TestWaitStructuredFastPath：带"写完"声明的结构化裁决（TUI/API 写入）
+// 免静默窗立即消费——快路径的期限断言（<300ms，远小于 60ms 静默窗的
+// 观测窗口 + tick 对齐的无害余量）。
+func TestWaitStructuredFastPath(t *testing.T) {
+	root := t.TempDir()
+	control := t.TempDir()
+	cfg := fastConfigControl(t, root, control)
+	m, err := NewManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := &Session{ID: "df", Dir: control, nonce: "n1", rev: 1}
+	if err := os.MkdirAll(sess.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	verdictPath := filepath.Join(sess.Dir, "verdict.md")
+	if err := os.WriteFile(verdictPath, []byte(verdictTemplate(sess)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond) // 等 watcher 建 mtime baseline
+		body := "---\ndiscussion: df\nnonce: n1\n---\n\n## 批注\n\n 接口已对齐。@approve\n" + types.ReplyFinalMarker + "\n"
+		_ = os.WriteFile(verdictPath, []byte(types.WithReplyFinal(body)), 0o644)
+	}()
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	o, err := m.Wait(ctx, sess)
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if o.Kind != OutcomeApproved {
+		t.Fatalf("outcome = %+v", o)
+	}
+	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
+		t.Fatalf("结构化裁决应零延迟消费，却用了 %v", elapsed)
+	}
+	if strings.Contains(o.Annotation, types.ReplyFinalMarker) {
+		t.Fatalf("标记泄漏进批注: %q", o.Annotation)
+	}
 }

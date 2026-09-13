@@ -91,6 +91,23 @@ type CheckResult struct {
 	Note string `json:"note"`
 }
 
+// EscalationView 是一条待人类回复的求助概要（GUI 的求助列表）。
+//
+// 语义：对应控制面 requests/pending/ 下的一份 escalation_<ulid>.md。它与
+// InboxItem 分立，因为求助走的是独立的 requests/pending→done 通道（不是
+// inbox/），且回复语义不同（写 "## 回复" 正文后移动到 done/，而非追加
+// @ 命令行）。
+//
+// 零值：零值 EscalationView 是一条"空求助"，无实际用途——本类型总是由
+// Escalations() 从文件解析后返回，调用方只读不构造。
+type EscalationView struct {
+	ID       string    `json:"id"`                 // escalation_<ulid>（= 文件名去掉 .md）
+	From     string    `json:"from,omitempty"`     // 发起求助的 Agent ID
+	Question string    `json:"question,omitempty"` // 一句可被直接回答的问题
+	Preview  string    `json:"preview,omitempty"`  // Reason/上下文首行预览
+	ModTime  time.Time `json:"mod_time"`           // pending 文件的修改时间
+}
+
 // Event 是事件流的单元（audit_events 的透传 + 序号游标）。
 type Event = store.AuditEvent
 
@@ -117,6 +134,18 @@ type Interaction interface {
 	ReplyGate(id string, d GateDecision) error
 	Discussions() ([]DiscussionView, error)
 	ReplyDiscussion(id, annotation string, approve bool) error
+	// Escalations 列出待人类回复的求助（控制面 requests/pending/）。
+	//
+	// 与 Inbox 分立：求助走独立的 requests/pending→done 通道，不在 inbox/。
+	// 无 requests/pending 目录（尚无求助）时返回空切片 + nil，不报错。
+	Escalations() ([]EscalationView, error)
+	// ReplyEscalation 回复一条求助：把 reply 写入 "## 回复" 正文并把文件
+	// 从 requests/pending/ 移动到 requests/done/（escalate.Mailbox 的读侧
+	// 会经 nonce 校验后消费）。id = 文件名去掉 .md（escalation_<ulid>）。
+	//
+	// 失败：id 非法/含路径穿越 → 错误；pending 文件不存在（已回复？）→ 错误；
+	// reply 为空 → 错误（空回复无意义，且读侧会把它当"编辑中间态"忽略）。
+	ReplyEscalation(id, reply string) error
 	// 管理。
 	ConfigRaw() ([]byte, error)
 	WriteConfig(raw []byte) error
