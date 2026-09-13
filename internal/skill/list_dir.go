@@ -68,7 +68,12 @@ func (s *listDirSkill) Execute(ctx context.Context, args map[string]any, env *Sk
 	}
 	info, statErr := os.Stat(res.RealPath)
 	if statErr != nil {
-		return nil, fmt.Errorf("list_dir %s: stat: %w", res.RealPath, statErr)
+		// [阶段 12 修正/真机发现 #9] ENOENT 是环境事实（目录不存在），
+		// 折算成普通失败回填模型（可据此换路径/先建目录）——裸 error 会被
+		// 执行器归类为 infra failure 并**终结整个 Run**（真机：一个不存在
+		// 的目录杀死了两个孙 Agent）。框架级故障（权限外的 IO 异常）仍走
+		// error 通道。
+		return NewFailure(ErrNotFound, "path not available (ENOENT): %s", strArg(args, "path", ".")), nil
 	}
 	if !info.IsDir() {
 		return NewFailure("NOT_A_DIRECTORY", "%s is a file, use file_read instead", res.RealPath), nil

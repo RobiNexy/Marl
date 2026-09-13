@@ -296,7 +296,9 @@ llm_wires:
     model: deepseek-flash
     thinking: "off"
 
-# 政策属性：什么放行什么问人（顺序匹配、首中生效）
+# 政策属性：什么放行什么问人（顺序匹配、首中生效）。
+# [阶段 12] llm_call 的维度限内自动放行（"limits 即缺省政策"——上面的
+# limits 块就是人审阈值本身）；规则表只需写"加码"项与编排分级。
 gate_rules:
   - id: allow-low-destruction
     match: {kind: orchestration, cache_destroyed_pct: "<10"}
@@ -305,9 +307,6 @@ gate_rules:
     match: {kind: orchestration}
     action: need_human
     reason: "破坏超过阈值，需要人审阅上下文操作"
-  - id: allow-sidecar-cheap
-    match: {kind: llm_call, wire: sidecar-cheap}
-    action: allow
 ```
 
 改完即生效面：`gate_rules` 是运行期每请求匹配；`limits` 在装配期物化
@@ -355,7 +354,7 @@ profile:
     prefer: [thinking, json_mode] # 同价可用则优先
   sampling:
     temperature: 0.2
-    max_tokens: 8000
+    max_tokens: 8000              # [阶段 12] start 的采样来自这里（消硬编码截断源）
     timeout_ms: 1800000
   allowed_skills: [list_dir, file_read, file_write]
     # 空 = 全部允许；白名单在调用时校验，不影响工具表（缓存前缀稳定）
@@ -380,6 +379,16 @@ go run ./cmd/marl knowledge pull -dir . -global <全局库>   # vendor/ + vendor
 见 §2 步骤 7）。`preferences/` 只有人类能写（它是缓存前缀的一部分，Agent 改它 = 每次请求
 缓存全冷 + 提示注入面）；`contracts/`、`decisions/` 由讨论闭环的
 Finalize 写入（author=human）。
+
+### 3.6 运行纪律（真机实录的教训）
+
+- **运行期产物不入工作区**：不要 `marl start > start.log` 之类的重定向进
+  项目目录——工作区是 Agent 的命名空间，模型会读它并把绝对路径带进工具
+  调用（实录：一串级联失败）；日志的归宿是控制面/state 目录。
+- **spawn 的 `writable_paths` 是 schema 必填**：漏填 = BAD_ARGS（显式
+  引导），权限写在 task 文本里不算数；空数组 = 显式只读子。
+- **llm_call 的限额即人审阈值**：限内自动放行、超限 Gate 问人（grants/
+  落盘承接 `@always-grant`，重启回插）——无需手写 allow 规则。
 
 ## 4. 扩展指南
 

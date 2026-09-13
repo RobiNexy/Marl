@@ -193,6 +193,11 @@ type Agent struct {
 	cacheMiss int64
 	// Transient（Part 3.6）：尾部 volatile 提示，不入 Log，下一轮编译后丢弃。
 	transients []string
+	// consumedTransients 是"已编译送达"的记账点（clearTransients 的清除
+	// 边界——本轮 handleTurn 新加的纠偏 Transient 必须活到下一轮编译）。
+	consumedTransients int
+	// formatCorrections 是本 Run 内格式纠偏重试的已用次数（上限防循环）。
+	formatCorrections int
 
 	// 阶段 6：单写者提交（只有父装配）。
 	commit *CommitConfig

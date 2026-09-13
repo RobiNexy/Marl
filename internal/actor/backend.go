@@ -292,6 +292,26 @@ func (b *FileBackend) scanOnce() {
 	}
 }
 
+// quietFor 是**类型化静默窗**（[阶段 12 修正/真机发现 #7] Part 14.4 的
+// 策略精确化）：静默窗防的是"编辑中的半截读取"——它的前提是**人类在
+// 就地编辑**。两形态的写入者不同：
+//
+//	gate   —— 人类编辑（多击键脉冲）→ 10s 静默（防半截裁决）；
+//	direct —— marl say 的 CLI 单次原子写 → 1s（纯传输延迟；10s 的编辑
+//	          窗对机器写入是纯死等——真机实录：6 次注入 5 次因静默窗
+//	          未到而错过 run 的剩余寿命）。
+//
+// 不对称是数据（frontmatter 的 type 字段），不是机制分叉。
+func quietFor(fileType string, base time.Duration) time.Duration {
+	if fileType == "direct" {
+		if base > time.Second {
+			return time.Second
+		}
+		return base
+	}
+	return base
+}
+
 // consider 对单个文件做静默窗判定与解析（状态经 seenMod/seenFirst）。
 func (b *FileBackend) consider(name string) {
 	path := filepath.Join(b.inboxDir(), name)
@@ -307,7 +327,7 @@ func (b *FileBackend) consider(name string) {
 		b.seenFirst[name] = time.Now()
 		return // 静默窗重新计时
 	}
-	if first.IsZero() || time.Since(first) < b.quiet {
+	if first.IsZero() || time.Since(first) < quietFor(fileTypeOf(name), b.quiet) {
 		return // 静默中
 	}
 	content, rerr := os.ReadFile(path)
@@ -329,6 +349,15 @@ func (b *FileBackend) consider(name string) {
 		//（缓冲 32 的满载是宿主停止消费的故障面，静默重试会掩盖它）。
 		fmt.Printf("actor: inbox read side full（%s 已归档 done/，回执需人工迁移）\n", name)
 	}
+}
+
+// fileTypeOf 从文件名取类型（命名约定 <type>_<ulid>.md；未知类型按最保守
+// 处置 = 全长静默窗）。
+func fileTypeOf(name string) string {
+	if i := strings.IndexByte(name, '_'); i > 0 {
+		return name[:i]
+	}
+	return ""
 }
 
 // parse 是收件箱文件的解析入口（带 nonce 对账——gate 回执必须原样带回

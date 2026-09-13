@@ -57,9 +57,10 @@ func batchCall(items []map[string]any, await string, n int) types.ToolCall {
 	return types.ToolCall{ID: "call-batch", Name: "spawn_batch", Arguments: b}
 }
 
-// itemOf 是批量单项的小构造（writable 省略 = 继承）。
+// itemOf 是批量单项的小构造（writable 显式给出——[阶段 12 修正] schema
+// 必填后，省略 = BAD_ARGS，"继承"语义本就不存在）。
 func itemOf(task string) map[string]any {
-	return map[string]any{"profile_id": "coder", "task": task}
+	return map[string]any{"profile_id": "coder", "task": task, "writable_paths": []string{"src/auth/**"}}
 }
 
 // TestThreeLevelFork：根 spawn_batch 2 子（await all）；每个子再 fork 1
@@ -180,9 +181,11 @@ func TestDepthAtTopRejectedToLLM(t *testing.T) {
 				toolCallTurn(reportCall("success", "孙子被深度闸拒后按降级路径完成了自己的部分。")),
 			}
 		}
-		// 孙：尝试 fork → 被拒 → report success（”到顶直接执行任务“）。
+		// 孙：尝试 fork（带 writable——[阶段 12 修正] writable_paths 已是
+		// schema 必填，缺失会先被 BAD_ARGS 拦住轮不到深度闸）→ 被拒 →
+		// report success（”到顶直接执行任务“）。
 		return []*wire.WireTurn{
-			toolCallTurn(spawnCall("coder", "深度 3：应被拒", nil, nil)),
+			toolCallTurn(spawnCall("coder", "深度 4：应被 MAX_DEPTH 拒", []string{"src/auth/**"}, nil)),
 			toolCallTurn(reportCall("success", "到顶拒绝；改用自己的 file_write 完成了任务。")),
 		}
 	}

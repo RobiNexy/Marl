@@ -381,3 +381,70 @@ func mustStore2(t *testing.T) *store.SQLiteStore {
 
 // 编译期面（config 的 Limits 在 llm_call 场景由 llmCallAgentAndFake 装配）。
 var _ = config.DefaultLimits
+
+// TestFormatCorrectionRetry：LLM 产出坏 tool_call（malformed/truncated）
+// 不再终结 Run——注入纠偏 Transient（下一轮编译送达）+ 重试；上限 3 次
+// 后按终结处置（ADR-0033）。
+func TestFormatCorrectionRetry(t *testing.T) {
+	a, _ := newTestAgent(t, &fakeLLM{})
+	adb, err := newStoreForTest(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.audit = store.AuditSQLite{SQLiteStore: adb}
+	// 脚本：坏 turn → 好 turn → reply（纠偏后模型重发成功）。
+	bad := &wire.WireTurn{Outcomes: []wire.Outcome{{
+		Signals: wire.OutcomeSignals{ErrorClass: wire.ErrOutputTruncated, MalformedOutput: true},
+	}}}
+	a.llm = &fakeLLM{turns: []*wire.WireTurn{bad,
+		toolCallTurn(mkCall("list_dir", map[string]any{"path": "."})),
+		replyTurn("修正后完成。"),
+	}}
+	ctx := context.Background()
+	if err := a.AppendUser(ctx, "任务"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Run(ctx); err != nil {
+		t.Fatalf("Run: %v（纠偏重试应消化 malformed/truncated）", err)
+	}
+	// 纠偏审计在场；被截断的 turn 不落真相（无 Entry——Signals-only）。
+	sawCorrection := false
+	for _, ev := range auditEventsMust(t, a) {
+		if ev.Action == "llm_output_corrected" {
+			sawCorrection = true
+		}
+	}
+	if !sawCorrection {
+		t.Fatal("llm_output_corrected audit missing")
+	}
+}
+
+// TestFormatCorrectionExhausted：连续 3 次坏产出 → 终结（上限防循环）。
+func TestFormatCorrectionExhausted(t *testing.T) {
+	a, _ := newTestAgent(t, &fakeLLM{})
+	adb2, err := newStoreForTest(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.audit = store.AuditSQLite{SQLiteStore: adb2}
+	bad := &wire.WireTurn{Outcomes: []wire.Outcome{{
+		Signals: wire.OutcomeSignals{ErrorClass: wire.ErrMalformed, MalformedOutput: true},
+	}}}
+	a.llm = &fakeLLM{turns: []*wire.WireTurn{bad, bad, bad, bad, bad, bad, bad, bad}}
+	if err := a.AppendUser(context.Background(), "任务"); err != nil {
+		t.Fatal(err)
+	}
+	runErr := a.Run(context.Background())
+	if runErr == nil || !strings.Contains(runErr.Error(), "malformed_output") {
+		t.Fatalf("exhausted corrections must terminate: %v", runErr)
+	}
+	sawExhausted := false
+	for _, ev := range auditEventsMust(t, a) {
+		if ev.Action == "llm_output_correction_exhausted" {
+			sawExhausted = true
+		}
+	}
+	if !sawExhausted {
+		t.Fatal("correction_exhausted audit missing")
+	}
+}

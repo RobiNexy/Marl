@@ -45,6 +45,9 @@ func (a *Agent) eventLoop(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("agent: round %d: compile view: %w", round, err)
 		}
+		// Transient 的消费记账点（本轮编译已把既有 Transient 送达模型——
+		// 轮末只清这些；handleTurn 期间新加的纠偏提示活到下一轮）。
+		a.consumedTransients = len(a.transients)
 		turn, err := a.llm.ExecuteTurn(ctx, req)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -98,6 +101,19 @@ func (a *Agent) eventLoop(ctx context.Context) error {
 		// 未 ready / 有工具调用 → 下一轮（maxRounds 兜底）。
 	}
 	return fmt.Errorf("agent: turn budget exhausted after %d rounds", a.maxRounds)
+}
+
+// maxFormatCorrections 是格式纠偏重试的 Run 内上限（防循环烧预算；
+// ADR-0033 的字面值）。
+const maxFormatCorrections = 3
+
+// formatCorrectionText 是纠偏 Transient 的文案（Part 3.6 的 volatile 提示：
+// 下一轮编译送达模型，模型据此拆小/修正后重发）。
+func formatCorrectionText(class wire.ErrorClass) string {
+	if class == wire.ErrOutputTruncated {
+		return "上一次产出的 tool_call 参数 JSON 被输出预算截断（finish_reason=length）。把单次输出拆小后重发：大文件分多次 file_write/file_edit，每次不超过约 60 行。"
+	}
+	return "上一次产出的 tool_call 参数不是合法 JSON。修正参数格式（完整、可解析的 JSON）后重发本次调用。"
 }
 
 // errWaitChildren 是 eventLoop 的内部哨兵：本轮 fork 了子 Agent，主循环
@@ -156,6 +172,23 @@ func (a *Agent) handleTurn(ctx context.Context, turn *wire.WireTurn) (int, error
 		if o.Signals.ErrorClass.IsError() {
 			// 错误分类进本轮证据信号（升级判据的输入；分类→证据的映射在 feedRound）。
 			a.roundErrorClass = o.Signals.ErrorClass
+			// 格式纠偏重试（[阶段 12 修正/真机发现 #2]——denormalizer 注释
+			// 预告的"可追加格式纠偏 Transient"落地）：malformed / truncated
+			// 不再终结 Run，而是注入纠偏提示（下一轮编译送达模型）+ 消费一轮
+			// 预算重试；上限 3 次防循环。升级证据照记（roundErrorClass 已置）。
+			if o.Signals.ErrorClass == wire.ErrMalformed || o.Signals.ErrorClass == wire.ErrOutputTruncated {
+				if a.formatCorrections < maxFormatCorrections {
+					a.formatCorrections++
+					a.transients = append(a.transients, formatCorrectionText(o.Signals.ErrorClass))
+					a.auditf(ctx, "llm_output_corrected", string(o.Signals.ErrorClass), map[string]any{
+						"agent_id": string(a.id), "attempt": a.formatCorrections,
+					})
+					return total, nil // 不终结：纠偏提示在下一轮编译时进入上下文
+				}
+				a.auditf(ctx, "llm_output_correction_exhausted", string(o.Signals.ErrorClass), map[string]any{
+					"agent_id": string(a.id), "attempts": a.formatCorrections,
+				})
+			}
 			// [阶段边界] 不做重试/排队：终结并带回类别。
 			// 同 turn 先于失败段的成功产出不消失——它们已落 Log。
 			return total, fmt.Errorf("llm outcome error class=%s (vendor/protocol failure)", o.Signals.ErrorClass)

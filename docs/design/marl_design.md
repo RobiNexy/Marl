@@ -4137,3 +4137,29 @@ discussion/escalation 已被 Gate 收编、authorship 早就是编码字段；
 - 真机：`marl start -dir <demo> "读 README.md…"` → 项目 Agent（AI d1）
   经正常裁决创建 → report 落 `human:samphi` 的收件箱；
   `marl status` 显示 `👤 human:samphi (depth=0)` 为根的监督树。
+
+---
+
+# Part 14 补遗：真机 dogfooding 的五项修正（阶段 12 收尾，ADR-0033..0035）
+
+2026-09-13 用 `marl` 二进制做了 13 次真实任务运行（N 皇后 + 过度设计 +
+2子×2孙拓扑，总花费 ¥0.54），十个发现全部按"编码 vs 设计"归类处理：
+
+1. **limits 即缺省政策**（Part 11.5 的语义澄清）：llm_call 的维度校验
+   （次数/token 对 limits）先行——限内 allow、超限 need_human；规则表
+   只作加码。旧形态"规则表全落空 → default-deny"叠加"deny 不计数"使
+   人审路径永远不可达。
+2. **`ErrOutputTruncated` 类 + 格式纠偏重试**（Part 10.11 类表增项）：
+   finish=length 的截断与格式能力错误分离；malformed/truncated 注入
+   纠偏 Transient + 一轮重试（Run 内上限 3）。顺带修正 Transient 的
+   消费边界（轮末只清已编译送达的前缀）。
+3. **spawn 的 writable_paths 升为 schema 必填**（意图层三态指针同面
+   强制）：漏填从静默降权改为显式拒绝；"漏填不继承"的防提权立场不变。
+4. **收件箱的类型化静默窗**（Part 14.4 精确化）：direct=1s（机器单次
+   写）、gate=10s（人类就地编辑）——不对称是数据（type 字段为键）。
+5. **start 装配补全**：读 `.marl/config.yaml`（limits/gate_rules 项目
+   覆盖）、采样来自 profiles（消硬编码 2048 截断源）、讨论/escalation/
+   Committer（单写者提交真机触发）/ 编排五件套接线。
+
+**单写者提交的真机形态**（首次在 `marl start` 验证）：子 report 收齐 →
+`marl[start-task] 任务完成提交 … (user: agent)` 落 fossil timeline。

@@ -14,14 +14,26 @@ import (
 )
 
 // 意图工具 schema（逐字节冻结；改动 = 全项目缓存前缀失效，必须评估）。
+//
+// [缓存注记 2026-09-13，ADR-0034 批次] 两处变更（一次摊薄缓存成本）：
+//  1. spawn_subagent / spawn_batch.items 的 writable_paths 置 required
+//     ——[真机发现 #6] "空 = 只读"的缺省与 LLM 的自然习惯（把权限写进
+//     task 文本）系统性冲突：三次 spawn 两次漏填 → 全树只读报废。漏填
+//     从"静默降权"（模型不可见）改为 schema 层拒绝（BAD_ARGS 可修正）；
+//     "权限不继承"的原则不变（空数组 = 显式只读仍合法）。
+//  2. spawn_batch schema 补缺失的右括号（[真机发现 #2 同源] schema 从
+//     写下起就是截断的非法 JSON——真跑在 wire encode 即报"Parameters
+//     不是合法 JSON"；dry-run 与 golden 只锁字节稳定所以未暴露）。
+//
+// 旧字节从未产出过一次成功的真跑调用，前缀失效成本为零。
 const (
 	schemaSpawnSubagent = `{"type":"object","properties":{` +
 		`"profile_id":{"type":"string","description":"Profile id of the child agent"},` +
 		`"task":{"type":"string","description":"Self-contained task description for the child (it sees nothing else from your context)"},` +
-		`"writable_paths":{"type":"array","items":{"type":"string"},"description":"Glob paths the child may write; MUST be a subset of your own writable scope"},` +
+		`"writable_paths":{"type":"array","items":{"type":"string"},"description":"Glob paths the child may write; MUST be a subset of your own writable scope. Empty array = explicitly read-only child. OMITTING this field is a schema error."},` +
 		`"readable_paths":{"type":"array","items":{"type":"string"},"description":"Optional extra readable globs (default: inherit yours)"},` +
 		`"prompt_override":{"type":"string","description":"Optional prompt id overriding the profile default"},` +
-		`"inject_message_seqs":{"type":"array","items":{"type":"integer"},"description":"Optional seq numbers of your log entries to inject into the child context"}},"required":["profile_id","task"]}`
+		`"inject_message_seqs":{"type":"array","items":{"type":"integer"},"description":"Optional seq numbers of your log entries to inject into the child context"}},"required":["profile_id","task","writable_paths"]}`
 
 	schemaReportToParent = `{"type":"object","properties":{` +
 		`"report":{"type":"string","description":"Free-text summary of what you did, which files changed, test results, and any blockers"},` +
@@ -60,10 +72,10 @@ const (
 		`"items":{"type":"array","items":{"type":"object","properties":{` +
 		`"profile_id":{"type":"string","description":"Profile id of the child agent"},` +
 		`"task":{"type":"string","description":"Self-contained task description for the child"},` +
-		`"writable_paths":{"type":"array","items":{"type":"string"},"description":"Glob paths the child may write; MUST be a subset of your own writable scope"},` +
+		`"writable_paths":{"type":"array","items":{"type":"string"},"description":"Glob paths the child may write; MUST be a subset of your own writable scope. Empty array = explicitly read-only child. OMITTING this field is a schema error."},` +
 		`"readable_paths":{"type":"array","items":{"type":"string"},"description":"Optional extra readable globs"},` +
 		`"prompt_override":{"type":"string","description":"Optional prompt id overriding the profile default"},` +
-		`"inject_message_seqs":{"type":"array","items":{"type":"integer"},"description":"Optional seq numbers of your log entries to inject"}}}},` +
+		`"inject_message_seqs":{"type":"array","items":{"type":"integer"},"description":"Optional seq numbers of your log entries to inject"}},"required":["profile_id","task","writable_paths"]}},` +
 		`"await":{"type":"string","enum":["all","any","n"],"description":"Resume you after all children report (default), after any one, or after n"},` +
 		`"n":{"type":"integer","description":"Resume threshold when await=n (1..len(items))"}},"required":["items"]}`
 )

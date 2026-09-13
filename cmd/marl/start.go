@@ -13,6 +13,11 @@
 // 通道：写 inbox/direct_<ulid>.md，运行中的 start 经 Receive 泵把信封投
 // 进 Agent 的信箱。daemon 化（长驻 + IPC）是后续阶段；本命令不假装它是。
 //
+// [运行纪律] 不要把 stdout/stderr 重定向进项目目录（`> start.log` 之类）
+// ——工作区是 Agent 的命名空间，运行期产物落进去会被模型 file_read（真机
+// 实录：模型读 start.log 后把绝对路径带进工具调用，触发一串失败）；日志
+// 的归宿是控制面（~/.local/state/marl/<project>/）。
+//
 // 用法：
 //
 //	DEEPSEEK_API_KEY=sk-... go run ./cmd/marl start -dir ~/demo "读 README.md 并总结"
@@ -32,10 +37,14 @@ import (
 	"marl/internal/actor"
 	"marl/internal/agent"
 	"marl/internal/config"
+	"marl/internal/discuss"
+	"marl/internal/escalate"
+	"marl/internal/fossil"
 	"marl/internal/gate"
 	"marl/internal/ladder"
 	"marl/internal/ledger"
 	"marl/internal/ns"
+	"marl/internal/profile"
 	"marl/internal/proto"
 	"marl/internal/skill"
 	"marl/internal/spawner"
@@ -118,7 +127,8 @@ func runStart(root, dbPath, task string) error {
 	defer st.Close()
 	aud := store.AuditSQLite{SQLiteStore: st}
 	reg := skill.NewMemRegistry()
-	for _, sk := range []skill.Skill{skill.ListDir, skill.FileRead, skill.FileWrite} {
+	for _, sk := range []skill.Skill{skill.ListDir, skill.FileRead, skill.FileWrite,
+		skill.OrchExclude, skill.OrchRestore, skill.OrchReorder, skill.OrchAnnotate, skill.OrchPin} {
 		if err := reg.Register(sk); err != nil {
 			return fmt.Errorf("register %s: %w", sk.Name(), err)
 		}
@@ -132,13 +142,39 @@ func runStart(root, dbPath, task string) error {
 		return fmt.Errorf("report checker: %w", err)
 	}
 
+	// --- 项目配置（[阶段 12 修正/真机发现 #4] start 接 .marl/config.yaml
+	// ——limits / gate_rules 的项目覆盖面；笔误显式报错不静默）---
+	cfgRaw, err := os.ReadFile(filepath.Join(root, ".marl", "config.yaml"))
+	if err != nil {
+		return fmt.Errorf("read project config: %w（先 marl init）", err)
+	}
+	cfgNode, err := config.Parse(cfgRaw)
+	if err != nil {
+		return fmt.Errorf("parse config.yaml: %w", err)
+	}
+	limits, err := config.ParseLimits(cfgNode)
+	if err != nil {
+		return fmt.Errorf("config limits: %w", err)
+	}
+	projectRules, err := config.ParseGateRules(cfgNode)
+	if err != nil {
+		return fmt.Errorf("config gate_rules: %w", err)
+	}
+	if len(projectRules) == 0 {
+		projectRules = orchRules() // 项目未配规则表 → 框架缺省（发现 #5 的维度缺省政策兜底）
+	}
+
 	// --- Gate（PDP + grants/ 落盘；重启回插人类批过的 always）---
 	controlRoot := controlRootOf(root)
 	grants, err := gate.NewGrantStore(controlRoot)
 	if err != nil {
 		return err
 	}
-	pdp, err := gate.NewManager(gate.ManagerConfig{Rules: orchRules(), Grants: grants, Audit: aud})
+	pdp, err := gate.NewManager(gate.ManagerConfig{
+		Rules:     projectRules,
+		LLMLimits: &gate.LLMLimits{MaxCalls: limits.CallTaskMax, MaxTokens: int64(limits.CallTaskMaxTokens)},
+		Grants:    grants, Audit: aud,
+	})
 	if err != nil {
 		return err
 	}
@@ -154,6 +190,24 @@ func runStart(root, dbPath, task string) error {
 	}
 	if len(saved) > 0 {
 		fmt.Printf("已恢复 %d 条永久放行规则（grants/）\n", len(saved))
+	}
+
+	// --- Profile（[发现 #3] 采样来自 .marl/profiles——消除硬编码 2048 的
+	// 截断根源；Part 6 的既有设计）---
+	profLoader := profile.NewLoader()
+	if err := profLoader.LoadAll(filepath.Join(root, ".marl", "profiles")); err != nil {
+		return fmt.Errorf("load profiles: %w", err)
+	}
+	prof, err := profLoader.Get("default")
+	if err != nil {
+		return fmt.Errorf("profile default: %w", err)
+	}
+	sampling := prof.Sampling
+	if sampling.MaxTokens <= 0 || sampling.MaxTokens > 8192 {
+		sampling.MaxTokens = 8192 // 目录能力的输出上限（startCatalog 的 ModelCaps）
+	}
+	if sampling.TimeoutMs <= 0 {
+		sampling.TimeoutMs = 120_000
 	}
 
 	// --- 线路（真跑形态：DEEPSEEK_API_KEY 在场；每 Agent 独立 Binding
@@ -230,9 +284,46 @@ func runStart(root, dbPath, task string) error {
 		return spw.SendTo(env.To, env)
 	})
 
+	// --- 讨论 / escalation / fossil（[发现 #4] 装配补全：引擎全实现，
+	// start 此前未接）---
+	cli, err := fossil.NewCLI("")
+	if err != nil {
+		return fmt.Errorf("fossil: %w", err)
+	}
+	repo := filepath.Join(root, ".marl", "project.fossil")
+	discussMgr, err := discuss.NewManager(discuss.Config{
+		Root: root, MARLDir: filepath.Join(root, ".marl"),
+		ControlDir:       filepath.Join(controlRoot, "discussions"),
+		DefaultTargetDir: filepath.Join(".marl", "knowledge", "contracts"),
+		VCS:              cli,
+		Audit:            aud,
+	})
+	if err != nil {
+		return fmt.Errorf("discuss manager: %w", err)
+	}
+	escMailbox, err := escalate.NewMailbox(escalate.MailboxConfig{
+		ControlRoot: controlRoot, Audit: aud,
+	})
+	if err != nil {
+		return fmt.Errorf("escalate mailbox: %w", err)
+	}
+	escMgr, err := escalate.NewManager(escalate.Config{
+		// 根 Agent（项目 Agent）的父就是人类 Actor——链条到人类是拓扑
+		// 事实（Part 14.6）；FallbackHuman 的文件信箱 = 人类收件箱的
+		// escalation 编码（requests/ 子树）。
+		Rule: func() (proto.EscalationRule, error) {
+			return proto.EscalationRule{FallbackHuman: true}, nil
+		},
+		Mailbox: escMailbox,
+	})
+	if err != nil {
+		return fmt.Errorf("escalate manager: %w", err)
+	}
+
 	// --- 工厂（项目 Agent 与子 Agent 同一入口）---
 	factory := &startFactory{st: st, reg: reg, root: root, resolver: resolver, chk: chk,
-		spw: spw, newLine: newLine, pdp: pdp, rec: rec, human: link}
+		spw: spw, newLine: newLine, pdp: pdp, rec: rec, human: link,
+		sampling: sampling, discuss: discussMgr, esc: escMgr, vcs: cli, repo: repo}
 	if err := spw.SetFactory(factory); err != nil {
 		return err
 	}
@@ -312,6 +403,12 @@ type startFactory struct {
 	pdp      *gate.Manager
 	rec      *ledger.Recorder
 	human    spawnerHumanLink
+	// [发现 #3/#4] 采样来自 Profile；讨论/escalation/fossil 的装配块。
+	sampling types.SamplingParams
+	discuss  *discuss.Manager
+	esc      *escalate.Manager
+	vcs      *fossil.CLI
+	repo     string
 }
 
 func (f *startFactory) BuildChild(ctx context.Context, plan *spawner.ChildPlan, req *proto.SpawnRequest) (spawner.ChildRunner, error) {
@@ -319,15 +416,15 @@ func (f *startFactory) BuildChild(ctx context.Context, plan *spawner.ChildPlan, 
 	if err != nil {
 		return nil, err
 	}
-	a, err := agent.New(agent.Config{
+	cfg := agent.Config{
 		ID: plan.ID, ParentID: plan.ParentID, Depth: plan.Depth, MaxDepth: 3,
 		Mailbox:      plan.Mailbox,
 		SystemPrompt: "你是 Marl 的 Agent：按任务工作；需要分治时 fork 子 Agent；完成时 report_to_parent。",
-		MaxRounds:    12,
+		MaxRounds:    16,
 		Log:          f.st, Views: f.st,
 		LLM: llm, Skills: f.reg,
 		Namespace: plan.Namespace, Resolver: f.resolver, ProjectRoot: f.root,
-		Sampling: types.SamplingParams{MaxTokens: 2048, TimeoutMs: 120_000},
+		Sampling: f.sampling,
 		TaskID:   "start-task",
 		Audit:    store.AuditSQLite{SQLiteStore: f.st},
 		Spawner:  f.spw, ReportSink: f.spw, ReportChecker: f.chk,
@@ -336,8 +433,16 @@ func (f *startFactory) BuildChild(ctx context.Context, plan *spawner.ChildPlan, 
 			Limits: config.DefaultLimits(),
 			Gates:  f.pdp,
 		},
-		Ledger: f.rec,
-	})
+		Ledger:     f.rec,
+		Discussion: &agent.DiscussionConfig{Manager: f.discuss},
+		Escalation: &agent.EscalationConfig{Manager: f.esc},
+	}
+	if plan.Depth == 1 {
+		// 项目 Agent 根：单写者提交面（只有父 Agent 装配——提交点在
+		// 父的唯一代码路径上，Part 8.4；仓库由 marl init 建）。
+		cfg.Committer = &agent.CommitConfig{VCS: f.vcs, RepoPath: f.repo}
+	}
+	a, err := agent.New(cfg)
 	if err != nil {
 		return nil, err
 	}

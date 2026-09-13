@@ -171,7 +171,12 @@ func renderStatusColored(w io.Writer, evs []*store.AuditEvent, color bool) {
 			get(ev.AgentID)
 			if d != nil {
 				child.parent = ev.AgentID
-				child.depth = numberOf(d["depth"])
+			}
+			// depth 守卫（[阶段 12 修正] 真机发现 #8）：agent 侧的 spawn
+			// 审计（intentSpawn 的回填）不带 depth 字段——用它覆盖会把
+			// spawner 侧的正确 depth 重置为 0。只在字段在场时更新。
+			if dv, ok := d["depth"]; ok {
+				child.depth = numberOf(dv)
 			}
 		case "actor_registered":
 			// 统一 Actor 面（Part 14.2 #2）：人类/装配 Agent 的注册行

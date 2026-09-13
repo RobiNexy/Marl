@@ -430,7 +430,7 @@ func TestForkInjectedMessages(t *testing.T) {
 		return []*wire.WireTurn{toolCallTurn(reportCall("success", "已阅读注入的契约。"))}
 	}
 	parent.llm = &scriptedParent{turns: []*wire.WireTurn{
-		toolCallTurn(spawnCall("coder", "阅读契约并确认", nil, []int64{1})),
+		toolCallTurn(spawnCall("coder", "阅读契约并确认", []string{}, []int64{1})),
 	}, final: replyTurn("done")}
 
 	if err := parent.AppendUser(ctx, "fork 一个子读契约"); err != nil {

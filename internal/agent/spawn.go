@@ -28,23 +28,38 @@ const (
 
 // spawnArgs 是 spawn_subagent 的参数形态（schema 的镜像；解析失败的字段
 // 按缺失处理，必填项缺失在裁决前拦截）。
+//
+// Writable 用指针承载三态（[阶段 12 修正/真机发现 #6]）：nil = 字段缺失
+// （BAD_ARGS——schema required 的执行面，厂商对 required 的执行不保证）；
+// 空数组 = 显式只读（合法，Part 9.2 的"空 = 只读"语义不变）；非空 = 授权。
 type spawnArgs struct {
-	ProfileID  string   `json:"profile_id"`
-	Task       string   `json:"task"`
-	Writable   []string `json:"writable_paths"`
-	Readable   []string `json:"readable_paths"`
-	Prompt     string   `json:"prompt_override"`
-	InjectSeqs []int64  `json:"inject_message_seqs"`
+	ProfileID  string    `json:"profile_id"`
+	Task       string    `json:"task"`
+	Writable   *[]string `json:"writable_paths"`
+	Readable   []string  `json:"readable_paths"`
+	Prompt     string    `json:"prompt_override"`
+	InjectSeqs []int64   `json:"inject_message_seqs"`
 }
 
-// spawnItemArgs 是 spawn_batch 里单个子的参数形态（单 spawn 的镜像子集）。
+// spawnItemArgs 是 spawn_batch 里单个子的参数形态（单 spawn 的镜像子集；
+// Writable 的三态语义同 spawnArgs）。
 type spawnItemArgs struct {
-	ProfileID  string   `json:"profile_id"`
-	Task       string   `json:"task"`
-	Writable   []string `json:"writable_paths"`
-	Readable   []string `json:"readable_paths"`
-	Prompt     string   `json:"prompt_override"`
-	InjectSeqs []int64  `json:"inject_message_seqs"`
+	ProfileID  string    `json:"profile_id"`
+	Task       string    `json:"task"`
+	Writable   *[]string `json:"writable_paths"`
+	Readable   []string  `json:"readable_paths"`
+	Prompt     string    `json:"prompt_override"`
+	InjectSeqs []int64   `json:"inject_message_seqs"`
+}
+
+// writableOf 是三态字段的统一出口：缺失 → (nil, 引导文案)；在场 → 值。
+func writableOf(w *[]string) ([]string, string) {
+	if w == nil {
+		return nil, "writable_paths 不能省略（schema 必填）：" +
+			"请显式给出子 Agent 的可写 glob（如 [\"src/solver/**\"]）；" +
+			"确要只读子就用空数组 []。权限写在 task 文本里不算数。"
+	}
+	return *w, ""
 }
 
 // batchArgs 是 spawn_batch 的参数形态（阶段 9"spawn_batch 工具"）。
@@ -61,12 +76,16 @@ func buildSpawnRequest(requester types.AgentID, item spawnItemArgs) (*proto.Spaw
 	if item.Task == "" {
 		return nil, "task 描述不能为空：子 Agent 需要知道做什么"
 	}
+	w, invalid := writableOf(item.Writable)
+	if invalid != "" {
+		return nil, invalid
+	}
 	return &proto.SpawnRequest{
 		RequesterID:     requester,
 		ProfileID:       types.ProfileID(item.ProfileID),
 		PromptOverride:  item.Prompt,
 		TaskDescription: item.Task,
-		WritablePaths:   item.Writable,
+		WritablePaths:   w,
 		ReadablePaths:   item.Readable,
 		InjectMessages:  item.InjectSeqs,
 		TraceID:         types.TraceID(fmt.Sprintf("spawn-%s", requester)),

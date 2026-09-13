@@ -32,6 +32,12 @@ const (
 	ErrAuthQuota       ErrorClass = "auth_quota"          // → 标记 endpoint 不健康，熔断，跳到阶梯下一级
 	ErrContentFilter   ErrorClass = "content_filter"      // → 交回 LLM 决策，记审计
 	ErrMalformed       ErrorClass = "malformed_output"    // → 计入升级证据；可追加格式纠偏 Transient
+	// ErrOutputTruncated 是输出预算截断（finish_reason=length + tool_call
+	// 参数非法 JSON——模型把大内容写进 arguments 被腰斩）。[阶段 12 新增/
+	// 真机发现 #2/#3] 处置：格式纠偏 Transient（"单次输出拆小"）+ 一次
+	// 重试；计入升级证据。与 ErrMalformed 的区别：成因是**预算**不是模型
+	// 格式能力——处置指引完全不同（拆小 vs 改格式）。
+	ErrOutputTruncated ErrorClass = "output_truncated"
 )
 
 // Valid 报告 c 是否为已定义分类（含 ErrNone）。
@@ -47,7 +53,7 @@ const (
 func (c ErrorClass) Valid() bool {
 	switch c {
 	case ErrNone, ErrTransient, ErrContextOverflow, ErrCapability,
-		ErrAuthQuota, ErrContentFilter, ErrMalformed:
+		ErrAuthQuota, ErrContentFilter, ErrMalformed, ErrOutputTruncated:
 		return true
 	}
 	return false
@@ -465,7 +471,17 @@ func buildOpenAIChatTurn(choice openAIChatChoice, raw *openAIChatUsage) *WireTur
 		calls, malformed := parseOpenAIChatToolCalls(msg.ToolCalls)
 		signals := OutcomeSignals{MalformedOutput: malformed}
 		if malformed {
-			signals.ErrorClass = ErrMalformed
+			// [阶段 12 修正/真机发现 #2/#3] 截断分辨：finish_reason=length
+			// 且 tool_call 参数非法 JSON——大概率是**输出预算截断**（模型把
+			// 大内容写进 arguments，token 到量 JSON 被腰斩），不是模型的
+			// "格式能力"问题。归 ErrOutputTruncated（处置：拆小单次输出后
+			// 重试），不再与 ErrMalformed 混同——真机实录：该信号被折叠成
+			// malformed 后按终结处置，5/13 次运行死于此。
+			if finishReason == "length" {
+				signals.ErrorClass = ErrOutputTruncated
+			} else {
+				signals.ErrorClass = ErrMalformed
+			}
 		}
 		outcomes = append(outcomes, Outcome{
 			ToolCalls: calls,

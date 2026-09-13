@@ -49,12 +49,28 @@ type Grant struct {
 type ManagerConfig struct {
 	// Rules 是规则表（顺序即匹配序，首中生效）。
 	Rules []Rule
+	// LLMLimits 是 llm_call 的维度缺省政策（"limits 即缺省政策"：限内
+	// allow / 超限 need_human——规则表只作加码；nil = DefaultLLMLimits）。
+	LLMLimits *LLMLimits
 	// Audit 非 nil 时记决策与 grant（原则 1 副产品）。
 	Audit store.AuditStore
 	// Now 注入（测试确定性）。
 	Now func() time.Time
 	// Grants 非 nil 时 GrantAlways 落盘（grants/ 目录；重启回插）。
 	Grants *GrantStore
+}
+
+// LLMLimits 是 llm_call 维度的缺省政策面（Part 11.5；消费侧收窄——
+// 完整 Limits 在 config 包且 config 依赖本包，反向引包成环，故本包
+// 只持有自己需要的两个维度；装配从 config.Limits 折算注入）。
+type LLMLimits struct {
+	MaxCalls  int   // 任务内次数上限
+	MaxTokens int64 // 任务累计 token 上限（0 = 不按 token 判）
+}
+
+// DefaultLLMLimits 是品牌缺省（与 config.DefaultLimits 的字面一致）。
+func DefaultLLMLimits() LLMLimits {
+	return LLMLimits{MaxCalls: 20, MaxTokens: 100_000}
 }
 
 // Manager 是 Gate 的 PDP。
@@ -134,9 +150,16 @@ func (m *Manager) ValidateRules() error {
 // Decide 是 PEP 的唯一问询入口（非阻塞；Part 14.7 的 GateRequest 化：
 // need_human 由调用方折算成 MsgGateRequest 发给人类 Actor 并挂起）。
 //
-// 顺序：
+// 顺序（[阶段 12 修正/真机发现 #5] 的语义澄清——"limits 即缺省政策"）：
 //  1. session grant（先享后减——批准过的额度不需要过规则表）；
-//  2. 规则表顺序匹配（首中生效）。
+//  2. 规则表顺序匹配（首中生效）；
+//  3. 规则表全部未命中 → **按 Limits 维度判**（Part 11.2 §2.7 的三维度
+//     原意：限内 = allow、超限 = need_human——维度校验本身就是分类，
+//     不依赖手写 allow 规则 + default-deny 的组合。真机实录：缺 allow
+//     规则时限额内的 llm_call 被拒，且 deny 不计数 → 超限的人审路径
+//     永远不可达——llm_call 整体死路）；
+//  4. 无法维度判定的 Kind（无 limits 维度）→ default-deny（"未分类
+//     即拒绝"的立场不变——兜底规则仍应显式书写）。
 //
 // 决策必过审计（AgentID/Kind/rule_id）。
 func (m *Manager) Decide(ctx context.Context, req *Request) Decision {
@@ -156,12 +179,67 @@ func (m *Manager) Decide(ctx context.Context, req *Request) Decision {
 		m.auditev(ctx, req, d, nil, "")
 		return d
 	}
-	// 规则表全部未命中：拒绝（默认拒绝是"未分类"操作面最诚实的形态——
-	// 规则表里永远该有一条 * 兜底，漏了也不会静默放行）。
+	// 维度缺省政策（发现 #5 的修复点；见函数头注释 3）。
+	if d, ok := m.limitsDecision(req); ok {
+		m.auditev(ctx, req, d, nil, "")
+		return d
+	}
+	// 规则表全部未命中且无维度可判：拒绝（默认拒绝是"未分类"操作面最
+	// 诚实的形态——规则表里永远该有一条 * 兜底，漏了也不会静默放行）。
 	d := Decision{Action: ActionDeny, RuleID: "default-deny",
 		Reason: "没有任何规则覆盖本操作（规则表应有 kind=\"*\" 的兜底规则——漏配仍按拒绝处理）"}
 	m.auditev(ctx, req, d, nil, "")
 	return d
+}
+
+// limitsDecision 是维度缺省政策的判定面（限内 allow / 超限 need_human）。
+// ok=false 表示该 Kind 没有 limits 维度（如 orchestration 的破坏分级
+// 只能靠规则表/属性判）。
+func (m *Manager) limitsDecision(req *Request) (Decision, bool) {
+	switch req.Kind {
+	case KindLLMCall:
+		// 维度：任务内次数（attrs.task_call_count）与任务累计 token
+		//（attrs.task_tokens）对 LLMLimits 的缺省。属性缺失 = PEP 未带
+		// 计数（装配 bug 面）→ 不判，落 default-deny。
+		count, cok := numberOfAttr(req.Attributes["task_call_count"])
+		if !cok {
+			return Decision{}, false
+		}
+		lim := m.llmLimits()
+		if count >= float64(lim.MaxCalls) {
+			return Decision{Action: ActionNeedHuman, RuleID: "limits-llm-overage",
+				Reason: fmt.Sprintf("llm_call 任务内次数 %d 已达上限 %d（limits.llm_call.task_max_calls）——等待人类授权", int64(count), lim.MaxCalls)}, true
+		}
+		if tokens, tok := numberOfAttr(req.Attributes["task_tokens"]); tok && lim.MaxTokens > 0 && tokens >= float64(lim.MaxTokens) {
+			return Decision{Action: ActionNeedHuman, RuleID: "limits-llm-overage",
+				Reason: fmt.Sprintf("llm_call 任务累计 token %d 已达上限 %d——等待人类授权", int64(tokens), lim.MaxTokens)}, true
+		}
+		return Decision{Action: ActionAllow, RuleID: "limits-llm-under",
+			Reason: fmt.Sprintf("维度限内（%d/%d 次）", int64(count), lim.MaxCalls)}, true
+	default:
+		return Decision{}, false
+	}
+}
+
+// llmLimits 取装配的维度缺省（nil = 品牌缺省 DefaultLLMLimits 的物化面）。
+func (m *Manager) llmLimits() LLMLimits {
+	if m.cfg.LLMLimits != nil {
+		return *m.cfg.LLMLimits
+	}
+	return DefaultLLMLimits()
+}
+
+// numberOfAttr 是属性数值的宽容读取（float64/int 族的 JSON 差异面）。
+func numberOfAttr(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	}
+	return 0, false
 }
 
 // ResolveGate 兑现人类的 GateReply（Part 14.7 的"MsgGateReply → Agent

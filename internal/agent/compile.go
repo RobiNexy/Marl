@@ -149,10 +149,18 @@ func (a *Agent) compileView(ctx context.Context) (*wire.CanonicalRequest, error)
 	return req, nil
 }
 
-// clearTransients 清空本轮 Transient（Part 3.6：下一轮 View 重建时自动丢弃——
-// "下一轮"在这里的语义是"本轮编译已把它送达模型之后"）。
+// clearTransients 清空**已消费**的 Transient（[阶段 12 修正] 的语义精确化：
+// Part 3.6 的"用完即扔"里，"用完" = 已被编译进上一轮请求——本轮 handleTurn
+// 期间**新加**的 Transient（如格式纠偏提示）必须活到下一轮编译，不能在
+// 轮末被无差别清掉（真机教训：清早了 = 模型永远看不到纠偏提示）。
+// 消费边界的记账点在 eventLoop 的 compileView 之后（consumedTransients）。
 func (a *Agent) clearTransients() {
-	a.transients = a.transients[:0]
+	n := a.consumedTransients
+	if n > len(a.transients) {
+		n = len(a.transients)
+	}
+	a.transients = a.transients[n:]
+	a.consumedTransients = 0
 }
 
 // toolsFromRegistry 把注册表 schema 转成协议无关的工具定义（冻结前缀的

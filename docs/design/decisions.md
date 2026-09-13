@@ -998,3 +998,49 @@ fork 稳定性）、真机跑（`fork_test`：父 fork 子 → 子只读 report 
 （讨论/审批/escalation/grant）进 CI。`marl start` 真机跑通（DeepSeek
 真密钥）：项目 Agent report 落人类收件箱；`marl status` 显示人类为根的
 监督树。
+
+## ADR-0033：格式纠偏重试与 `output_truncated` 类（真机发现 #2/#3）
+
+**实证**：dogfooding（13 次运行）中 5 次死于 `malformed_output` 终结；
+curl 复现钉死因果——模型把大程序塞进一次 tool_call 的 arguments，
+`finish_reason=length` 截断 JSON → `json.Valid=false` → malformed →
+Run 终结。vendor 响应里的截断信号被折叠，分辨率丢失。
+
+1. **类表增项 `ErrOutputTruncated`**（finish=length + tool_call 参数非法
+   JSON 的组合判定）：与 malformed 的区别是成因（预算 vs 格式能力），
+   处置指引因此不同（拆小 vs 改格式）。
+2. **格式纠偏 Transient 落地**（denormalizer 注释早有预告）：malformed /
+   truncated 不终结 Run——注入 Part 3.6 的纠偏 Transient（下一轮编译
+   送达模型）+ 消费一轮预算重试；Run 内上限 **3 次**（防循环烧预算），
+   升级证据照记。
+3. **Transient 消费边界的缺陷顺带修复**：旧 clearTransients 在轮末无差别
+   清空——handleTurn 期间新加的提示活不过当轮轮末，模型永远看不到。
+   修正为"清除已编译送达的前缀"（consumedTransients 记账点）。
+
+## ADR-0034：spawn 的 `writable_paths` 升为 schema 必填（真机发现 #6）
+
+**实证**：模型在任务文本被显式警告的情况下，两次 spawn_batch 仍把权限
+写进 task 文本、漏填结构化字段 → 全树只读（孙 PATH_READONLY 级联报废）。
+"空 = 只读"的缺省对人类是安全设计、对 LLM 是静默陷阱（它看不见自己被降权）。
+
+1. **schema 必填**（spawn_subagent 与 spawn_batch.items）：漏填 →
+   BAD_ARGS + 引导文案（"权限写在 task 文本里不算数；只读子用空数组"）
+   ——漏填从"静默降权"（不可见）改为"显式拒绝"（可修正）。
+2. **意图层同面强制**（厂商对 required 的执行不保证）：writable_paths
+   三态指针（nil=缺失 / []=显式只读 / 非空=授权）。
+3. **"漏填不继承"的原则不变**（Part 9.2 防静默提权的立场不动）——只改
+   可见性，不改权威。
+4. **缓存注记**：schema 冻结字节变更 = 全项目缓存前缀失效（一次冷启动）；
+   与 spawn_batch 的括号修复同批落地（旧字节从未产出过一次成功的真跑
+   调用，成本为零）。真机复验：修复后 5 次 spawn 全部带正确 writable。
+
+## ADR-0035：收件箱的类型化静默窗（真机发现 #7）
+
+**实证**：`marl say` 六次注入五次未被消费——静默窗（10s，为人编辑设计）
+对 CLI 的单次原子写是纯死等，快收尾的 Run 总在窗内死掉。
+
+1. **静默窗按文件类型分策略**（不对称是数据，frontmatter 的 type 为键）：
+   `direct`（机器单次写）→ 1s；`gate`（人类就地编辑）→ 保持 10s；
+   discussion verdict / escalation 维持既有机制不动。
+2. **真机复验**：say 注入 → 1s 消费归档 → human_note 进 Agent 上下文
+   （Log #24）——"下一轮编排自然看到"的语义边界（不保证被执行）不变。

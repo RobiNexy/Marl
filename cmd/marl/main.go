@@ -9,7 +9,9 @@
 //	marl start "任务"        # 人类 spawn 项目 Agent（Part 14.6，阶段 12）
 //	marl say "文本"          # 人类 → Actor 的 MsgDirect（Part 14.5）
 //
-// 无参数 = init（阶段 6 的唯一入口；保持向后兼容的裸调用习惯）。
+// 无参数 = usage（[阶段 12 修正] 旧形态"无参数 = init 当前目录"是危险
+// 缺省——真机验收中把仓库自身初始化成了项目；init 是一次性幂等操作，
+// 必须显式发起）。
 package main
 
 import (
@@ -18,9 +20,21 @@ import (
 	"strings"
 )
 
+// usageText 是子命令面板（缺省命令的打印面）。
+const usageText = `usage: marl <command> [args]
+
+commands:
+  init [dir]               初始化项目（fossil 仓库 + .marl 骨架；幂等一次性）
+  knowledge lint|pull|promote   知识库编译检查 / 全局库拉取 / 提升
+  models probe             模型探活（chat / tool_call / cache 三判据）
+  status                   监督树与阻塞状态（人类为根）
+  log / attach             对话导出 / tail
+  start "任务"             人类 spawn 项目 Agent（attached 运行）
+  say "文本"               人类 → Actor 的直接消息（MsgDirect）`
+
 func main() {
 	args := os.Args[1:]
-	cmd := "init" // 缺省 = init（阶段 6 的裸调用兼容）
+	cmd := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, args = args[0], args[1:]
 	}
@@ -43,7 +57,11 @@ func main() {
 	case "say":
 		err = cmdSay(args)
 	default:
-		err = fmt.Errorf("unknown command %q (want: init | knowledge | status | log | attach | start | say)", cmd)
+		if cmd == "" && len(args) == 0 {
+			fmt.Println(usageText)
+			return
+		}
+		err = fmt.Errorf("unknown command %q（无参数 = usage；init 须显式发起）\n\n%s", cmd, usageText)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "marl %s: %v\n", cmd, err)
