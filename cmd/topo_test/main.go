@@ -30,16 +30,16 @@ import (
 	"strings"
 	"time"
 
-	"marl/internal/actor"
-	"marl/internal/agent"
-	"marl/internal/ns"
-	"marl/internal/proto"
-	"marl/internal/skill"
-	"marl/internal/spawner"
-	"marl/internal/store"
-	"marl/internal/types"
-	"marl/internal/watchdog"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/actor"
+	"github.com/RobiNexy/Marl/internal/agent"
+	"github.com/RobiNexy/Marl/internal/ns"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/spawner"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/watchdog"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 func main() {

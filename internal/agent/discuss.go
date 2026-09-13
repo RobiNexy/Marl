@@ -23,9 +23,9 @@ import (
 	"errors"
 	"fmt"
 
-	"marl/internal/discuss"
-	"marl/internal/skill"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/discuss"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // DiscussionConfig 是讨论机制的装配参数（Config.Discussion 非 nil 即启用）。
@@ -91,7 +91,7 @@ type discussArgs struct {
 // 载体）。拒绝的近似形态是"草稿为空"（BAD_ARGS）。
 func (a *Agent) intentDiscussion(ctx context.Context, call types.ToolCall) (*skill.SkillResult, error) {
 	if a.discussCfg == nil || a.discussCfg.Manager == nil {
-		return skill.NewFailure(ErrIntentNotHandled, "讨论机制未装配（框架级缺失；如实回填不装死）"), nil
+		return skill.NewFailure(ErrIntentNotHandled, "request_discussion is not available: discussion is not configured for this agent"), nil
 	}
 	var args discussArgs
 	if len(call.Arguments) > 0 {
@@ -241,7 +241,7 @@ func (a *Agent) autoDiscussTurn(ctx context.Context, path string) *skill.SkillRe
 // 两种触发形态在 Manager.Open 处汇合）。
 func (a *Agent) intentDiscussionWithTopic(ctx context.Context, topic, draft string) (*skill.SkillResult, error) {
 	if a.discussCfg == nil || a.discussCfg.Manager == nil {
-		return skill.NewFailure(ErrIntentNotHandled, "讨论机制未装配"), nil
+		return skill.NewFailure(ErrIntentNotHandled, "request_discussion is not available: discussion is not configured"), nil
 	}
 	sess, err := a.discussCfg.Manager.Open(ctx, discuss.OpenRequest{
 		AgentID: a.id, Topic: topic, Draft: "目标路径：" + topic + "\n\n" + draft,

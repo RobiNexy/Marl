@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"sync"
 
-	"marl/internal/proto"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // Manager 是框架侧的 Escalation 客户端（发送 + 等回 + 分发）。

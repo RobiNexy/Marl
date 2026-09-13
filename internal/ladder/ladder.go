@@ -11,9 +11,9 @@ import (
 	"os"
 	"sort"
 
-	"marl/internal/config"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/config"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // Config 是 ladder.yaml 的内存形态。

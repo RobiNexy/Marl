@@ -24,8 +24,8 @@ import (
 	"strings"
 	"time"
 
-	"marl/internal/config"
-	"marl/internal/fossil"
+	"github.com/RobiNexy/Marl/internal/config"
+	"github.com/RobiNexy/Marl/internal/fossil"
 )
 
 // VendorLock 是 vendor.lock 的解析形态（Pull/Promote 的对账键）。

@@ -8,11 +8,11 @@ import (
 	"errors"
 	"fmt"
 
-	"marl/internal/orchestrate"
-	"marl/internal/proto"
-	"marl/internal/skill"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/orchestrate"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // eventLoop 反复"编译上下文 → Execute → 消化 turn"直到任务自然完结。
@@ -265,6 +265,14 @@ func (a *Agent) appendAssistantToolCalls(ctx context.Context, calls []types.Tool
 // 并发：本方法在 eventLoop 的单 goroutine 里顺序调用（10.16 约束 2）；
 // ctx 取消传播到技能的 IO。
 func (a *Agent) executeToolCall(ctx context.Context, call types.ToolCall) error {
+	// 0a. shell 技能的 Gate 面（Part 11.3 的 KindShell；[阶段 13] 真机
+	// 验收的补强——命令执行必须过闸：白名单（规则表按 command_prefix
+	// 首词匹配）放行，其余问人；规则未覆盖 = 拒绝（fail-closed）。
+	if call.Name == skill.SkillShellExec {
+		if bad := a.gateShell(ctx, call); bad != nil {
+			return a.appendToolEntry(ctx, call, bad)
+		}
+	}
 	// 0. 意图工具：改系统结构的能力走各自的裁决关口（Part 4.1 的边界）。
 	//    意图不做白名单校验（它的权限模型是 Profile.CanSpawn / 深度，
 	//    由关口裁决），也不查技能注册表。

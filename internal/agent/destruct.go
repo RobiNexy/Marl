@@ -22,8 +22,8 @@ package agent
 import (
 	"fmt"
 
-	"marl/internal/config"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/config"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // cacheDestruction 是一次 View 操作的破坏量测算结果。

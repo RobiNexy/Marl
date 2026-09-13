@@ -10,12 +10,12 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/ladder"
-	"marl/internal/ledger"
-	"marl/internal/skill"
-	"marl/internal/store"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/ladder"
+	"github.com/RobiNexy/Marl/internal/ledger"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // testUsage 是测试用的固定用量（记账断言的输入）。

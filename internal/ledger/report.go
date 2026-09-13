@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // Render 渲染一份任务成本报表（Part 7.6 的表格形态）。

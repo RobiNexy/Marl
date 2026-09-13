@@ -13,7 +13,7 @@ import (
 	"context"
 	"fmt"
 
-	"marl/internal/actor"
+	"github.com/RobiNexy/Marl/internal/actor"
 )
 
 // ScriptedReply 是剧本的一行：收到一条消息 → 产出若干回信。

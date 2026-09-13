@@ -15,7 +15,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"marl/internal/knowledge"
+	"github.com/RobiNexy/Marl/internal/knowledge"
 )
 
 func cmdKnowledge(args []string) error {

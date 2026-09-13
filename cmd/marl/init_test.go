@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/fossil"
+	"github.com/RobiNexy/Marl/internal/fossil"
 )
 
 func needFossil(t *testing.T) *fossil.CLI {

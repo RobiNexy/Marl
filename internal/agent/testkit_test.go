@@ -10,10 +10,10 @@ import (
 	"sync"
 	"testing"
 
-	"marl/internal/ns"
-	"marl/internal/proto"
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/ns"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // newStoreForTest 是 SQLite 后端的最小装配（文件在临时目录，随 t 结束清理）。

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // 测试规格（契约来自 types.Resolver 与 Part 5.1/5.2/5.4）：

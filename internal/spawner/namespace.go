@@ -9,8 +9,8 @@ package spawner
 import (
 	"fmt"
 
-	"marl/internal/proto"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // buildNamespace 从请求与父命名空间构建子命名空间。

@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // Kind 是 Gate 的决策面分类（Part 11.3 §3.2 / §3.4）。

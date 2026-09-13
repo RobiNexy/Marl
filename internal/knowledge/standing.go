@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // StandingBlock 是 preferences/ 的编译产物。

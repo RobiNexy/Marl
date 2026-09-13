@@ -3,7 +3,7 @@ package proto
 import (
 	"strconv"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // MsgType 是 Mailbox 消息类型（Part 8.7；Part 14.5 的统一修订）。

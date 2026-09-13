@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // 本文件是**唯一**碰 HTTP 与厂商 JSON 的地方（WireAdapter 的职责边界）。

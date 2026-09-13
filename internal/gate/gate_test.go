@@ -10,7 +10,7 @@ import (
 	"context"
 	"testing"
 
-	"marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/proto"
 )
 
 func ruleOf(id string, kind Kind, action Action) Rule {

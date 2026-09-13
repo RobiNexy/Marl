@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // TestCompileStandingOrderPlacement：常驻块出现在 system 之后、历史段

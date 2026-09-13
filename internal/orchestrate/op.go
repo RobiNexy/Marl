@@ -3,8 +3,8 @@ package orchestrate
 import (
 	"context"
 
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // OpKind 是编排操作的原子种类（Part 3.5）。

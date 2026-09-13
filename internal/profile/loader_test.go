@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // writeProfile 是测试素材写入器（多个文件、独立小场景）。

@@ -3,7 +3,7 @@ package wire
 import (
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // CacheMode 是模型的缓存模式（Part 10.4）。

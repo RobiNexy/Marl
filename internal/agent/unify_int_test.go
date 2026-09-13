@@ -18,17 +18,17 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/actor"
-	"marl/internal/actor/actortest"
-	"marl/internal/config"
-	"marl/internal/discuss"
-	"marl/internal/escalate"
-	"marl/internal/gate"
-	"marl/internal/proto"
-	"marl/internal/spawner"
-	"marl/internal/store"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/actor"
+	"github.com/RobiNexy/Marl/internal/actor/actortest"
+	"github.com/RobiNexy/Marl/internal/config"
+	"github.com/RobiNexy/Marl/internal/discuss"
+	"github.com/RobiNexy/Marl/internal/escalate"
+	"github.com/RobiNexy/Marl/internal/gate"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/spawner"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // unifiedHarness 是四场景共用的装配：真实 Spawner + ScriptedHuman 注册

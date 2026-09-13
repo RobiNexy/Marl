@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // goldenIntentSchemasJSON 是 intentSchemas() 当前产出的冻结形态

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 func ev(seq int64, agent, action, target string, payload any) *store.AuditEvent {

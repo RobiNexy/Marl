@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"marl/internal/actor"
-	"marl/internal/proto"
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/actor"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // ChildPlan 是批准后交给 ChildFactory 的建子计划（裁决的全部产出 +

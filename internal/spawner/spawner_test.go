@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/actor"
-	"marl/internal/actor/actortest"
-	"marl/internal/proto"
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/actor"
+	"github.com/RobiNexy/Marl/internal/actor/actortest"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // ---------------------------------------------------------------------------

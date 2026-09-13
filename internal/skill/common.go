@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
-	"marl/internal/ns"
+	"github.com/RobiNexy/Marl/internal/ns"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // resolvedPath 是 Resolver 检查通过后的路径事实（types.PathResolution 的

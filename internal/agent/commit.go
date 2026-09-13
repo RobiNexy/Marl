@@ -14,8 +14,8 @@ import (
 	"fmt"
 	"strings"
 
-	"marl/internal/fossil"
-	"marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/fossil"
+	"github.com/RobiNexy/Marl/internal/proto"
 )
 
 // CommitConfig 是单写者提交的装配参数（Config.Committer 非 nil 即启用）。

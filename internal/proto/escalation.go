@@ -3,7 +3,7 @@ package proto
 import (
 	"fmt"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // EscalationRequest 是"沿上报链冒泡的求助消息"（Part 11.3）。

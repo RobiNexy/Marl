@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"strings"
 
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // standingSegment 编译常驻块段（StandingOrders 为空时返回 nil）。

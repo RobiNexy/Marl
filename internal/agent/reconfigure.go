@@ -21,9 +21,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"marl/internal/proto"
-	"marl/internal/skill"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // reconfArgs 是 request_reconfigure 的参数形态（schema 只带 reason——

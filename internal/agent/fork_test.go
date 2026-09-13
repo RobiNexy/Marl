@@ -12,13 +12,13 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/actor"
-	"marl/internal/proto"
-	"marl/internal/skill"
-	"marl/internal/spawner"
-	"marl/internal/store"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/actor"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/spawner"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // forkFactory 用真实 agent 构建子（Spawner.ChildFactory 的测试实现）。

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // WireID 已在 types 包定义（避免与本包循环依赖，见 types/ids.go）。

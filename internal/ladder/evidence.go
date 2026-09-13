@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"sync"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // EvidencePolicy 是证据权重与升级阈值。

@@ -12,9 +12,9 @@ import (
 	"sort"
 	"strings"
 
-	"marl/internal/orchestrate"
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/orchestrate"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // SumCompressor 是 orchestrate.Compressor 的实现。

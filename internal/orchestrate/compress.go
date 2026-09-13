@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // SUM 七段骨架的固定章节标题（Part 3.7 步骤 5：机械检查章节标题）。

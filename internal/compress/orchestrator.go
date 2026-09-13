@@ -14,9 +14,9 @@ import (
 	"strings"
 	"sync"
 
-	"marl/internal/orchestrate"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/orchestrate"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // Executor 是编排调用对 Wire 层的最窄接口（消费侧定义，与 agent.LLMExecutor

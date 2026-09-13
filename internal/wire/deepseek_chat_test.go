@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // 本文件的夹具：适配器 + 一条最小可用的 WireRequest。

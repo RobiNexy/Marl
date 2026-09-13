@@ -35,8 +35,8 @@ import (
 	"strings"
 	"time"
 
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // defaultRemotePro 是用例 8 的第二个远端模型名（跨模型缓存 + 档位支持）。

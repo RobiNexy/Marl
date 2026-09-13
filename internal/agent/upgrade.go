@@ -12,10 +12,10 @@ import (
 	"context"
 	"fmt"
 
-	"marl/internal/ladder"
-	"marl/internal/store"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/ladder"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // 审计 action 常量（审计是开放集合，但 Action 名必须定义常量——禁止调用点

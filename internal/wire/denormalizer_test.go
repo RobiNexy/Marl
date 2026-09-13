@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // otherWire 是"另一条线路"的占位值：WireID 枚举只声明已实现的线路

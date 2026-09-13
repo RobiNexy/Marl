@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/store"
 
-	"marl/internal/actor"
-	"marl/internal/fossil"
-	"marl/internal/spawner"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/actor"
+	"github.com/RobiNexy/Marl/internal/fossil"
+	"github.com/RobiNexy/Marl/internal/spawner"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // setupCommit 装配一套带 fossil 的父+子环境（复用 fork 的装配骨架，

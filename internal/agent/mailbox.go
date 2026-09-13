@@ -21,8 +21,8 @@ import (
 	"errors"
 	"fmt"
 
-	"marl/internal/proto"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // ReportSink 是子 Agent 投递 report 的窄接口（消费侧定义；实现是 Spawner）。

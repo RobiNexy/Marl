@@ -31,7 +31,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"marl/internal/fossil"
+	"github.com/RobiNexy/Marl/internal/fossil"
 	"strings"
 )
 

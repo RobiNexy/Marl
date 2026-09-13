@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // ---------------------------------------------------------------------------

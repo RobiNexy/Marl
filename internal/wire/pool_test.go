@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 func poolTestCall(ep string, depth int, tag string) *PoolCall {

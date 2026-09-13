@@ -30,7 +30,10 @@ commands:
   status                   监督树与阻塞状态（人类为根）
   log / attach             对话导出 / tail
   start "任务"             人类 spawn 项目 Agent（attached 运行）
-  say "文本"               人类 → Actor 的直接消息（MsgDirect）`
+  say "文本"               人类 → Actor 的直接消息（MsgDirect）
+  stop                     优雅停止后台任务（--force 强杀）
+  doctor                   环境自检（fossil / API key / 骨架 / store）
+  version                  构建信息`
 
 func main() {
 	args := os.Args[1:]
@@ -56,6 +59,12 @@ func main() {
 		err = cmdStart(args)
 	case "say":
 		err = cmdSay(args)
+	case "stop":
+		err = cmdStop(args)
+	case "version":
+		err = cmdVersion(args)
+	case "doctor":
+		err = cmdDoctor(args)
 	default:
 		if cmd == "" && len(args) == 0 {
 			fmt.Println(usageText)

@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // logCols 是带列名查询的单一来源（防止列序与 decodeLogRow 漂移）。

@@ -16,8 +16,8 @@ import (
 	"sort"
 	"sync"
 
-	"marl/internal/config"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/config"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // ErrNotFound 是 Get 的"没有这个 Profile"哨兵（调用方 errors.Is 判定）。

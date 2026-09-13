@@ -20,7 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // Resolver 的错误哨兵。技能层把它们机械翻译成 ToolResult 的错误码：

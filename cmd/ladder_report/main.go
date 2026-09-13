@@ -16,9 +16,9 @@ import (
 	"fmt"
 	"os"
 
-	"marl/internal/ledger"
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/ledger"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 func main() {

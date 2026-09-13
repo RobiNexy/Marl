@@ -20,14 +20,14 @@ import (
 	"fmt"
 	"sync"
 
-	"marl/internal/discuss"
-	"marl/internal/ladder"
-	"marl/internal/ledger"
-	"marl/internal/proto"
-	"marl/internal/skill"
-	"marl/internal/store"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/discuss"
+	"github.com/RobiNexy/Marl/internal/ladder"
+	"github.com/RobiNexy/Marl/internal/ledger"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // LLMExecutor 是主循环对 Wire 层的窄接口（消费侧定义）。

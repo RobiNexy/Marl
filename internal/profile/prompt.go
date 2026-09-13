@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	"marl/internal/config"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/config"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // PromptStore 是提示词索引的文件实现（满足 types.PromptIndex）。

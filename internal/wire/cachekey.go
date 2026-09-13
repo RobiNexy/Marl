@@ -3,7 +3,7 @@ package wire
 import (
 	"strings"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // 缓存键的三个维度，来自设计文档的三处表述（必须放在一起看，否则极易漏一维）：

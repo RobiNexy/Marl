@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // ledgerRecord 实现 store.Ledger.Record（RecordOrchestration/RecordDiscussion

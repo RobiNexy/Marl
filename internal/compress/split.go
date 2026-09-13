@@ -8,7 +8,7 @@ package compress
 import (
 	"strings"
 
-	"marl/internal/orchestrate"
+	"github.com/RobiNexy/Marl/internal/orchestrate"
 )
 
 // ZoneScanner 实现 orchestrate.NoSplitZoneScanner。

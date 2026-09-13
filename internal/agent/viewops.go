@@ -17,10 +17,10 @@ import (
 	"errors"
 	"fmt"
 
-	"marl/internal/gate"
-	"marl/internal/orchestrate"
-	"marl/internal/skill"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/gate"
+	"github.com/RobiNexy/Marl/internal/orchestrate"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // agentViewOps 实现 orchestrate.ViewOps（Agent 的 env.Orch 载体）。

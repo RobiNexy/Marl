@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/actor"
-	"marl/internal/proto"
-	"marl/internal/spawner"
-	"marl/internal/store"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/actor"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/spawner"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 func humanEscCall() types.ToolCall {

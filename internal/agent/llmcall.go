@@ -20,11 +20,11 @@ import (
 	"fmt"
 	"strings"
 
-	"marl/internal/config"
-	"marl/internal/gate"
-	"marl/internal/skill"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/config"
+	"github.com/RobiNexy/Marl/internal/gate"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 const (
@@ -101,7 +101,7 @@ type llmCallMsg struct {
 // 所有数字进消息。
 func (a *Agent) intentLLMCall(ctx context.Context, call types.ToolCall) (*skill.SkillResult, error) {
 	if a.llmCallCfg == nil {
-		return skill.NewFailure(ErrIntentNotHandled, "llm_call 未装配（框架级缺失；如实回填）"), nil
+		return skill.NewFailure(ErrIntentNotHandled, "llm_call is not available: not configured for this agent"), nil
 	}
 	var args llmCallArgs
 	if len(call.Arguments) > 0 {

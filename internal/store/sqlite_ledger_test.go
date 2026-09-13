@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 func newLedgerStore(t *testing.T) *SQLiteStore {

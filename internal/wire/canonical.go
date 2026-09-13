@@ -3,7 +3,7 @@ package wire
 import (
 	"encoding/json"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // SegmentKind 是 Canonical 片段的种类（Part 10.3）。

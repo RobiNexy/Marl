@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // LoadView 读回某 Agent 最近保存的 View；无记录时返回**带 AgentID 的空 View**

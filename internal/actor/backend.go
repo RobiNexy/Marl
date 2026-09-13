@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"marl/internal/proto"
-	"marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/store"
 )
 
 // Envelope 是本包对 proto.Envelope 的别名（Part 14.4 的路由一致面）。

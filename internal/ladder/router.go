@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // StaticCatalog 是 wire.Catalog 的内存实现（阶段 4：代码注册，阶段 7 换配置加载）。

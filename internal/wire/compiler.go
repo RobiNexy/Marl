@@ -3,7 +3,7 @@ package wire
 import (
 	"context"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // Compiler 把 ContextView 编译成线路片段序列（Part 3.4 的"编译器"）。

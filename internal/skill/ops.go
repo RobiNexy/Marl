@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"strings"
 
-	"marl/internal/orchestrate"
+	"github.com/RobiNexy/Marl/internal/orchestrate"
 )
 
 // opSkill 是编排技能的公共骨架（参数定位协议的单一翻译点）。

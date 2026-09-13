@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/proto"
 )
 
 // TestHumanIDFormat：human: 前缀的构造/判定/拆解（路由与呈现的唯一判据）。
@@ -120,14 +120,15 @@ func TestFileBackendGateRoundtrip(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("deliver: %v", err)
 	}
-	// 文件在收件箱（frontmatter nonce 在场）。
+	// 文件在收件箱（frontmatter nonce 在场；[发现 #11] 模板示例已注释化，
+	// 不再有裸 @ 行）。
 	path := inboxPath(root, "gate_01hq.md")
 	body := mustRead(t, path)
-	if !strings.Contains(body, "nonce: abcd1234") || !strings.Contains(body, "@grant once") {
+	if !strings.Contains(body, "nonce: abcd1234") || !strings.Contains(body, "# @grant once") {
 		t.Fatalf("template: %s", body)
 	}
-	// 人类编辑：把缺省行换成 @grant next 2（frontmatter 不动）。
-	mustWrite(t, path, strings.Replace(body, "@grant once", "@grant next 2", 1))
+	// 人类裁决：另起一行写 @grant next 2（模板示例是注释，必须自己写）。
+	mustWrite(t, path, body+"\n@grant next 2\n")
 	// Receive：静默窗后解析出回执信封。
 	select {
 	case env := <-fb.Receive():
@@ -306,4 +307,30 @@ func mustGlobReport(root string, t *testing.T) string {
 	}
 	t.Fatal("report file missing")
 	return ""
+}
+
+// TestFileBackendGateTemplateNotAutoApproved：[发现 #11 回归] 无人编辑的
+// 审批文件（自带注释化示例）**绝不**被解析成裁决——模板的 @ 行已注释，
+// 解析器跳过 # 行；文件留在收件箱继续等。
+func TestFileBackendGateTemplateNotAutoApproved(t *testing.T) {
+	root := t.TempDir()
+	fb, err := NewFileBackend(FileConfig{Root: root, Human: HumanID("u7"),
+		PollInterval: 10 * time.Millisecond, Quiescence: 60 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fb.Stop()
+	if err := fb.Deliver(Envelope{From: "sub_1", To: HumanID("u7"),
+		Type: proto.MsgGateRequest,
+		Payload: &proto.GateRequest{RequestID: "auto1", Nonce: "n1", Kind: "shell",
+			AgentID: "sub_1", RuleID: "review-shell"}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case env := <-fb.Receive():
+		t.Fatalf("无人编辑的模板不得自动裁决: %+v", env)
+	case <-time.After(400 * time.Millisecond):
+	}
+	// 文件仍在（等待真实的人类裁决）。
+	mustRead(t, inboxPath(root, "gate_auto1.md"))
 }

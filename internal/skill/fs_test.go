@@ -13,9 +13,9 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/ns"
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/ns"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // newTestEnv 构造 SkillEnv：workspace = 临时目录，全工作区可写

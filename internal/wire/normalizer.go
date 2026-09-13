@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // WireMessage 是线路协议里的一条消息（正常化的产物，Part 10.9）。

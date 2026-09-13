@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"strings"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // ViewEntry 是匹配器的候选形态（Agent 侧从 View+Log 组装；匹配器是纯函数）。

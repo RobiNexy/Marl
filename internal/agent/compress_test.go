@@ -15,11 +15,11 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/compress"
-	"marl/internal/orchestrate"
-	"marl/internal/skill"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/compress"
+	"github.com/RobiNexy/Marl/internal/orchestrate"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // sumExecutor 是编排调用的替身（compress.Executor）：恒定返回一份可通过

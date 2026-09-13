@@ -3,7 +3,7 @@ package proto
 import (
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // ReportStatus 是子 Agent report 的状态（Part 9.6）。

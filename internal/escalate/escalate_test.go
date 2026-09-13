@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/proto"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 func TestRoute(t *testing.T) {

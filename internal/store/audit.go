@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // AuditEvent 是一条审计记录（原则 1 的副产品：一切结构性变更集中审计）。

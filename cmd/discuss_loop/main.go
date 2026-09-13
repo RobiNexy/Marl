@@ -29,18 +29,18 @@ import (
 	"time"
 
 	"encoding/json"
-	"marl/internal/agent"
+	"github.com/RobiNexy/Marl/internal/agent"
 
-	"marl/internal/config"
-	"marl/internal/discuss"
-	"marl/internal/fossil"
-	"marl/internal/knowledge"
-	"marl/internal/ns"
-	"marl/internal/profile"
-	"marl/internal/skill"
-	"marl/internal/store"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/config"
+	"github.com/RobiNexy/Marl/internal/discuss"
+	"github.com/RobiNexy/Marl/internal/fossil"
+	"github.com/RobiNexy/Marl/internal/knowledge"
+	"github.com/RobiNexy/Marl/internal/ns"
+	"github.com/RobiNexy/Marl/internal/profile"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 type options struct {

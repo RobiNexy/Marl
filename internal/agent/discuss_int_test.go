@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/discuss"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/discuss"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // fakeDiscussionManager 是 Agent 测试中的手势台：Open 释放 session，

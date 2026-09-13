@@ -12,8 +12,8 @@ import (
 	"errors"
 	"fmt"
 
-	"marl/internal/orchestrate"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/orchestrate"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // CompressConfig 是压缩的装配参数（Config.Compression 非 nil 即启用）。

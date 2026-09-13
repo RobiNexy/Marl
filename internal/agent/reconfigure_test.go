@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/proto"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 func reConfigureCall(addon string) types.ToolCall {

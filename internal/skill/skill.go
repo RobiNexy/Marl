@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"marl/internal/orchestrate"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/orchestrate"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // SkillKind 是技能的能力标签（Part 4.3 准则 7）。

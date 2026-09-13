@@ -11,8 +11,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // miniCaps 是阶段 2/3 的能力表替身（与 probe 的 staticCaps 同源同取舍：

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // TestConcurrentAppend 两 Agent 并发追加（MessageLog 契约：必须支持多 Agent

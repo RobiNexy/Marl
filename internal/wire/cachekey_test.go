@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // TestCachePrefix 是 13.3 点名要求的测试（含 Patch 1 的缓存桶维度）。

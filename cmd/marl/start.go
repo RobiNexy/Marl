@@ -30,27 +30,31 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
-	"marl/internal/actor"
-	"marl/internal/agent"
-	"marl/internal/config"
-	"marl/internal/discuss"
-	"marl/internal/escalate"
-	"marl/internal/fossil"
-	"marl/internal/gate"
-	"marl/internal/ladder"
-	"marl/internal/ledger"
-	"marl/internal/ns"
-	"marl/internal/profile"
-	"marl/internal/proto"
-	"marl/internal/skill"
-	"marl/internal/spawner"
-	"marl/internal/store"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/actor"
+	"github.com/RobiNexy/Marl/internal/agent"
+	"github.com/RobiNexy/Marl/internal/config"
+	"github.com/RobiNexy/Marl/internal/discuss"
+	"github.com/RobiNexy/Marl/internal/escalate"
+	"github.com/RobiNexy/Marl/internal/fossil"
+	"github.com/RobiNexy/Marl/internal/gate"
+	"github.com/RobiNexy/Marl/internal/ladder"
+	"github.com/RobiNexy/Marl/internal/ledger"
+	"github.com/RobiNexy/Marl/internal/ns"
+	"github.com/RobiNexy/Marl/internal/profile"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/spawner"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // cmdStart 处理 start 子命令（人类 spawn 项目 Agent 并 attached 等完成）。
@@ -58,6 +62,7 @@ func cmdStart(args []string) error {
 	fs := flag.NewFlagSet("marl start", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "项目目录")
 	db := fs.String("db", "", "存储数据库路径（缺省 <dir>/.marl/store.db）")
+	detach := fs.Bool("detach", false, "后台运行（日志落控制面；marl stop 停止 / marl status 跟踪）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -72,7 +77,119 @@ func cmdStart(args []string) error {
 	if *db == "" {
 		*db = filepath.Join(root, ".marl", "store.db")
 	}
-	return runStart(root, *db, task)
+	if *detach {
+		return detachStart(root, *db, task)
+	}
+	return runStart(root, *db, task, nil)
+}
+
+// detachStart 把 runStart 放进后台进程（setsid 新会话——脱离当前进程组，
+// 终端关闭不带走它；日志与 PID 落控制面）。控制面上的 run.lock 是"已有
+// 后台任务在跑"的判据（stop/status 与防双跑都读它）。
+func detachStart(root, dbPath, task string) error {
+	controlRoot := controlRootOf(root)
+	lockPath := filepath.Join(controlRoot, "run.lock")
+	if pid, ok := readRunLock(lockPath); ok && processAlive(pid) {
+		return fmt.Errorf("已有后台任务在跑（PID %d，控制面 %s）；先 marl stop 或继续观察 marl status", pid, controlRoot)
+	}
+	if err := os.MkdirAll(controlRoot, 0o755); err != nil {
+		return fmt.Errorf("mkdir control plane: %w", err)
+	}
+	logFile, err := os.OpenFile(filepath.Join(controlRoot, "start.log"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open control-plane log: %w", err)
+	}
+	defer logFile.Close()
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(exe, "start", "-dir", root, "-db", dbPath, task)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Stdin = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("detach: %w", err)
+	}
+	if err := os.WriteFile(lockPath, []byte(fmt.Sprintf("pid: %d\nstarted_at: %s\ntask: %s\n",
+		cmd.Process.Pid, time.Now().UTC().Format(time.RFC3339), task)), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("后台任务已启动（PID %d）\n  日志：%s\n  跟踪：marl status；插话：marl say；停止：marl stop\n", cmd.Process.Pid, controlRoot)
+	return nil
+}
+
+// cmdStop 终止后台任务（Part 14.5 的 MsgShutdown 语义 + 兜底强杀）。
+func cmdStop(args []string) error {
+	fs := flag.NewFlagSet("marl stop", flag.ContinueOnError)
+	dir := fs.String("dir", ".", "项目目录")
+	force := fs.Bool("force", false, "跳过优雅等待直接 SIGKILL")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	controlRoot := controlRootOf(filepathAbs(*dir))
+	lockPath := filepath.Join(controlRoot, "run.lock")
+	pid, ok := readRunLock(lockPath)
+	if !ok || !processAlive(pid) {
+		_ = os.Remove(lockPath) // 陈旧锁清理
+		return fmt.Errorf("没有在跑的后台任务（控制面 %s）", controlRoot)
+	}
+	if !*force {
+		if p, perr := os.FindProcess(pid); perr == nil {
+			_ = p.Signal(syscall.SIGTERM) // 优雅信号（进程自行收尾：view 落盘 / 代报）
+		}
+		// 等待收尾（最多 8s；活着一律转强杀）。
+		deadline := time.Now().Add(8 * time.Second)
+		for time.Now().Before(deadline) && processAlive(pid) {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	if processAlive(pid) {
+		if p, perr := os.FindProcess(pid); perr == nil {
+			_ = p.Kill()
+		}
+		fmt.Printf("已强制终止（PID %d）\n", pid)
+	} else {
+		fmt.Printf("后台任务已停止（PID %d）\n", pid)
+	}
+	_ = os.Remove(lockPath)
+	return nil
+}
+
+// readRunLock 读 run.lock 的 pid（文件损坏/无 pid = false——当作没在跑）。
+func readRunLock(path string) (int, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	for _, ln := range strings.Split(string(data), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(ln), "pid:"); ok {
+			if pid, perr := strconv.Atoi(strings.TrimSpace(v)); perr == nil && pid > 0 {
+				return pid, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// processAlive 报告进程是否存在（信号 0 探测）。
+func processAlive(pid int) bool {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
+}
+
+// filepathAbs 的小包装（cmdStop 的参数收敛）。
+func filepathAbs(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return dir
+	}
+	return abs
 }
 
 // cmdSay 处理 say 子命令（人类 → Actor 的直接消息）。
@@ -115,9 +232,16 @@ func cmdSay(args []string) error {
 
 // runStart 是一次完整的 attached 运行：装配 → 人类登记 → 正常裁决建
 // 项目 Agent → 等它的 report 回到收件箱。
-func runStart(root, dbPath, task string) error {
-	ctx, stop := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer stop()
+func runStart(root, dbPath, task string, _ []string) error {
+	// 优雅终止的双入口：Ctrl-C（attached）与 marl stop（SIGTERM/detach）。
+	// ctx 取消 = Agent 的 Run 收尾（View 落盘 + 代报兜底），不是硬杀。
+	sigCtx, sigStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer sigStop()
+	ctx, cancel := context.WithTimeout(sigCtx, 30*time.Minute)
+	defer cancel()
+
+	// 后台任务（detach）的运行锁在进程退出时摘除。
+	defer os.Remove(filepath.Join(controlRootOf(root), "run.lock"))
 
 	// --- 存储与技能（与 mini 同一形态：真相之源 + 投影 + 账本 + 审计）---
 	st, err := store.OpenSQLite(dbPath)
@@ -128,6 +252,7 @@ func runStart(root, dbPath, task string) error {
 	aud := store.AuditSQLite{SQLiteStore: st}
 	reg := skill.NewMemRegistry()
 	for _, sk := range []skill.Skill{skill.ListDir, skill.FileRead, skill.FileWrite,
+		skill.ShellExec,
 		skill.OrchExclude, skill.OrchRestore, skill.OrchReorder, skill.OrchAnnotate, skill.OrchPin} {
 		if err := reg.Register(sk); err != nil {
 			return fmt.Errorf("register %s: %w", sk.Name(), err)
@@ -536,13 +661,17 @@ func startCatalog() *ladder.StaticCatalog {
 	return cat
 }
 
-// orchRules 是 attached 运行的默认规则表（llm_call 超限问人 + 编排破坏
-// 分级——Part 11.5 的字面形态；grants/ 落盘承接 always）。
+// orchRules 是 attached 运行的默认规则表（llm_call 维度缺省由 LLMLimits
+// 承担——见 #5 的"limits 即缺省政策"；编排分级 + shell 白名单在此；
+// grants/ 落盘承接 always）。
 func orchRules() []gate.Rule {
 	return []gate.Rule{
 		{ID: "allow-low-destruction", Match: map[string]string{"kind": "orchestration", "cache_destroyed_pct": "<10"}, Action: gate.ActionAllow},
 		{ID: "review-destructive", Match: map[string]string{"kind": "orchestration"}, Action: gate.ActionNeedHuman, Reason: "高破坏编排需人审阅上下文操作"},
-		{ID: "review-llm-overage", Match: map[string]string{"kind": "llm_call", "task_call_count": ">=20"}, Action: gate.ActionNeedHuman, Reason: "llm_call 超出任务次数额度"},
+		// shell 白名单：构建/测试工具链放行（Agent 自验证编译的前提），
+		// 其余命令问人——fail-closed 的白名单，不是黑名单。
+		{ID: "allow-go-toolchain", Match: map[string]string{"kind": "shell", "command_prefix": "go"}, Action: gate.ActionAllow},
+		{ID: "review-shell", Match: map[string]string{"kind": "shell"}, Action: gate.ActionNeedHuman, Reason: "命令不在白名单（默认只放行 go 工具链）——需要人类审批"},
 	}
 }
 

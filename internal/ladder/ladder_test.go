@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // ---------------------------------------------------------------------------

@@ -19,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 func cmdLog(args []string) error {

@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"marl/internal/spawner"
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/spawner"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // Table 是 Watchdog 对进程表的窄面（消费侧收窄；Spawner 实现）。

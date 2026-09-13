@@ -11,9 +11,9 @@ import (
 	"fmt"
 	"os"
 
-	"marl/internal/skill"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // RoleForLogRole 把内部角色映射到呈现角色（Part 3.4 默认映射表）。

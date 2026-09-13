@@ -1,6 +1,6 @@
 package proto
 
-import "marl/internal/types"
+import "github.com/RobiNexy/Marl/internal/types"
 
 // Part 14（阶段 12）新增消息的载荷类型（Part 14.5 修订后的消息面）。
 //

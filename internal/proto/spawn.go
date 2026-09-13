@@ -3,7 +3,7 @@ package proto
 import (
 	"context"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // SpawnRequest 是 fork 子 Agent 的意图（Part 9.2）。

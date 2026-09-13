@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"marl/internal/proto"
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // KindAll 是规则表通配（Part 11.3 §3.5 建议规则表带一条 kind="*" 的

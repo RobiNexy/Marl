@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // MessageLog 是消息库的存储接口（Part 3.2）。

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 func entry(ref, role, content string, tokens int) ViewEntry {

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // ReconfigureRequest 是运行时参数调整意图（Part 6.9）。

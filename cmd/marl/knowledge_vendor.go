@@ -15,8 +15,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"marl/internal/fossil"
-	"marl/internal/knowledge"
+	"github.com/RobiNexy/Marl/internal/fossil"
+	"github.com/RobiNexy/Marl/internal/knowledge"
 )
 
 // defaultGlobalRepo 是全局知识库的缺省位置（XDG_DATA_HOME，Part 12.7）。

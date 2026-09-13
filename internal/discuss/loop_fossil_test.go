@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/fossil"
+	"github.com/RobiNexy/Marl/internal/fossil"
 )
 
 // setupFossilRoot 建一个真 fossil 项目（init + open + 骨架 + 首提交）。

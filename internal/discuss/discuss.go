@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"marl/internal/fossil"
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/fossil"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // OpenRequest 是一次"Agent 申请讨论"的请求。

@@ -23,9 +23,9 @@ import (
 	"fmt"
 	"time"
 
-	"marl/internal/proto"
-	"marl/internal/skill"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // EscalationConfig 是 Escalation 机制的装配参数（Config.Escalation 非 nil
@@ -69,7 +69,7 @@ type pendingEscalation struct {
 // 配置错误（框架级），上抛；用户面参数问题走 BAD_ARGS。
 func (a *Agent) intentRequestHuman(ctx context.Context, call types.ToolCall) (*skill.SkillResult, error) {
 	if a.escCfg == nil || a.escCfg.Manager == nil {
-		return skill.NewFailure(ErrIntentNotHandled, "escalation 机制未装配（框架级缺失；如实回填）"), nil
+		return skill.NewFailure(ErrIntentNotHandled, "request_human is not available: escalation is not configured"), nil
 	}
 	var args escArgs
 	if len(call.Arguments) > 0 {

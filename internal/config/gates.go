@@ -11,7 +11,7 @@ package config
 import (
 	"fmt"
 
-	"marl/internal/gate"
+	"github.com/RobiNexy/Marl/internal/gate"
 )
 
 // Limits 是经济性约束的汇总块（Part 11.5）。

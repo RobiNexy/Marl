@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // ErrorClass 是归一化后的错误分类（Part 10.11）。

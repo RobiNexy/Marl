@@ -54,8 +54,8 @@ import (
 	"syscall"
 	"time"
 
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // 默认值。除远端模型名以外，其余都取自设计文档（10.4 的 models.yaml 片段、

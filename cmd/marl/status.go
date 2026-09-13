@@ -33,8 +33,8 @@ import (
 
 	"github.com/mattn/go-isatty"
 
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // 审计 action 常量（与 internal/agent、internal/discuss 的写入点共享

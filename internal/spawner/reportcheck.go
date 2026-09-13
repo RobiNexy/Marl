@@ -19,7 +19,7 @@ import (
 	"regexp"
 	"strings"
 
-	"marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/proto"
 )
 
 // changeClaimRe 匹配"声称改了文件"的句子（中英动词 + 路径样 token）。

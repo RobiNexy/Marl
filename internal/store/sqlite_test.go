@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 func newTestStore(t *testing.T) *SQLiteStore {

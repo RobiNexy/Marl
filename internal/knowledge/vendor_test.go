@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/fossil"
+	"github.com/RobiNexy/Marl/internal/fossil"
 )
 
 // setupGlobalRepo 建一个真 fossil 全局库（含一条知识）。

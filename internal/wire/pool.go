@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // HealthStatus 是接入点健康状态（Part 10.12）。

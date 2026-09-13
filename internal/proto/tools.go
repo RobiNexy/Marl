@@ -1,6 +1,6 @@
 package proto
 
-import "marl/internal/types"
+import "github.com/RobiNexy/Marl/internal/types"
 
 // 意图工具名常量（Part 4.1 的"意图 vs 技能"边界）。
 //

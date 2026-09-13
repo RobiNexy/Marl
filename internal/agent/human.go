@@ -14,16 +14,17 @@ package agent
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
-	"marl/internal/actor"
-	"marl/internal/gate"
-	"marl/internal/proto"
-	"marl/internal/skill"
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/actor"
+	"github.com/RobiNexy/Marl/internal/gate"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // HumanLink 是 Agent 对"人类 Actor"的窄接口（消费侧定义，Part 14.2 的
@@ -72,17 +73,17 @@ func (a *Agent) requestGateReview(ctx context.Context, req *gate.Request, attrs 
 			"agent_id": string(a.id), "rule": dec.RuleID,
 		})
 		return skill.NewFailure(ErrCodeGateDenied,
-			"命中规则 %s：%s\n人类 Actor 未装配（无审批面）——显式拒绝而非挂起。请降低请求规模或改用其它路径。",
+			"Rule %s: %s\nNo human approver is configured for this deployment (fail-closed, not a hang). Reduce the request size or use a different path.",
 			dec.RuleID, dec.Reason)
 	}
 	ulid, err := store.NewMessageID()
 	if err != nil {
-		return skill.NewFailure("GATE_INTERNAL", "审批凭据生成失败：%v（本次未执行）", err)
+		return skill.NewFailure("GATE_INTERNAL", "gate approval ID generation failed: %v (not executed)", err)
 	}
 	ulid = strings.ToLower(ulid)
 	nonce, nerr := newGateNonce()
 	if nerr != nil {
-		return skill.NewFailure("GATE_INTERNAL", "审批凭据生成失败：%v（本次未执行）", nerr)
+		return skill.NewFailure("GATE_INTERNAL", "gate approval ID generation failed: %v (not executed)", nerr)
 	}
 	gateReq := &proto.GateRequest{
 		RequestID:  ulid,
@@ -114,14 +115,14 @@ func (a *Agent) requestGateReview(ctx context.Context, req *gate.Request, attrs 
 		a.gatePending = nil
 		a.mu.Unlock()
 		return skill.NewFailure("GATE_UNREACHABLE",
-			"审批请求投递失败：%v（人类收件箱断链；本次未执行）", err)
+			"gate approval delivery failed: %v (human inbox unreachable; not executed)", err)
 	}
 	a.auditf(ctx, "gate_pending", string(req.Kind), map[string]any{
 		"agent_id": string(a.id), "rule": dec.RuleID, "reason": dec.Reason,
 		"request_id": ulid, "to": string(a.human.HumanID()),
 	})
 	return skill.NewFailure(ErrCodeGatePendingHuman,
-		"命中规则 %s：%s\n属性：%s\n审批请求已投递到人类收件箱（gate_%s.md），等待人类裁决（本次调用未执行）。",
+		"Rule %s: %s\nAttributes: %s\nApproval request delivered to the human inbox (gate_%s.md); waiting for the human decision (not executed this time).",
 		dec.RuleID, dec.Reason, actor.AttributesSummary(attrs), ulid)
 }
 
@@ -277,4 +278,30 @@ func (a *Agent) deliverGateReply(reply *proto.GateReply, from types.AgentID) {
 	a.auditf(context.Background(), "gate_reply_received", reply.RequestID, map[string]any{
 		"from": string(from), "action": reply.Action,
 	})
+}
+
+// gateShell 是 shell_exec 的 Gate 面（Part 11.3 的 KindShell；阶段 13 的
+// shell 技能接线）：命令首词（command_prefix）按规则表匹配——白名单放行、
+// 其余 need_human（信封往返人审）、未覆盖拒绝（fail-closed）。
+func (a *Agent) gateShell(ctx context.Context, call types.ToolCall) *skill.SkillResult {
+	var sa struct {
+		Command string `json:"command"`
+	}
+	_ = json.Unmarshal(call.Arguments, &sa)
+	prefix := ""
+	if f := strings.Fields(sa.Command); len(f) > 0 {
+		prefix = f[0]
+	}
+	attrs := map[string]any{"command_prefix": prefix, "command": sa.Command}
+	req := &gate.Request{Kind: gate.KindShell, AgentID: a.id, Attributes: attrs}
+	dec := a.gates().Decide(ctx, req)
+	switch dec.Action {
+	case gate.ActionAllow:
+		return nil
+	case gate.ActionNeedHuman:
+		return a.requestGateReview(ctx, req, attrs, dec)
+	default:
+		return skill.NewFailure("GATE_DENIED", "命中规则 %s：%s（命令 %q 未放行——白名单外一律问人）",
+			dec.RuleID, dec.Reason, prefix)
+	}
 }

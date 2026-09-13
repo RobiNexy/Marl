@@ -1,0 +1,7 @@
+构建过度设计版 N 皇后求解器（Go 仅标准库，带 TUI）。
+[格式铁律] spawn_batch 的 arguments 必须完全按此模板（writable_paths 是与 task 平级的必填字段）：
+{"items":[{"profile_id":"coder","task":"<子任务>","writable_paths":["src/solver/**"]},{"profile_id":"coder","task":"<子任务>","writable_paths":["src/tui/**"]}],"await":"all"}
+[过度设计硬性要求] SolverStrategy 接口 + BacktrackingSolver/BitwiseSolver 两实现 + SolverFactory 工厂 + ProgressObserver 观察者接口 + TUI Renderer 接口 + AnsiRenderer/PlainRenderer 两实现；一切文件用相对路径写；大文件分多次 file_write（每次不超 60 行）防止输出截断。
+[拓扑硬性要求] 你 spawn_batch 恰好 2 个子：子 A（[src/solver/**]）做求解核心并自己 spawn_batch 恰好 2 个孙（[src/solver/**]）：A1 写 src/solver/BacktrackingSolver.go 与 src/solver/ProgressObserver.go；A2 写 src/solver/BitwiseSolver.go 与 src/solver/SolverFactory.go；子 B（[src/tui/**]）做 TUI 并自己 spawn_batch 恰好 2 个孙（[src/tui/**]）：B1 写 src/tui/Renderer.go 与 src/tui/AnsiRenderer.go；B2 写 src/tui/PlainRenderer.go；每个孙写完立即 report_to_parent。
+[收尾铁律] 你收齐 2 个子的 report 后亲自写 src/main.go（N=8 的 TUI 主循环）与 src/README.md（架构说明），然后 report_to_parent（status=success，列出全部文件清单并确认收到人类插话）。
+不要多 spawn 额外 Agent；不要使用 llm_call；不要读 start.log。

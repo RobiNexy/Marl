@@ -10,7 +10,7 @@ package agent
 import (
 	"encoding/json"
 
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // 意图工具 schema（逐字节冻结；改动 = 全项目缓存前缀失效，必须评估）。

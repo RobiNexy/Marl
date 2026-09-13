@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // 本文件实现 Part 3.5 的编排操作原子集（类型契约沿用阶段 0 的定义，
@@ -29,13 +29,13 @@ import (
 //
 // 用哨兵而非 nil 结果的原因：nil, nil 会把"没做"伪装成成功，而调用方
 // （主循环）需要区分"没东西可压"（继续跑）与"压缩失败"（降级/上报）。
-var ErrNothingToCompress = errors.New("marl/orchestrate: nothing to compress (tail keep covers all rounds)")
+var ErrNothingToCompress = errors.New("github.com/RobiNexy/Marl/orchestrate: nothing to compress (tail keep covers all rounds)")
 
 // ErrSingleSegment 是拆分修复后只剩一段的哨兵：把一条消息"拆"成一段
 // 等于原样复制一份进 Log（纯浪费 token 与血缘节点），且几乎总是意味着
 // LLM 判断"这条消息本不该拆"。调用方（未来的 split 技能包装）应把该
 // 错误如实回填给模型。
-var ErrSingleSegment = errors.New("marl/orchestrate: split repaired to a single segment (nothing to split)")
+var ErrSingleSegment = errors.New("github.com/RobiNexy/Marl/orchestrate: split repaired to a single segment (nothing to split)")
 
 // ---------------------------------------------------------------------------
 // 参数类型（阶段 0 契约，字面注释保留）

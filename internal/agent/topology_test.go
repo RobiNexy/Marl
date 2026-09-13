@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/proto"
-	"marl/internal/spawner"
-	"marl/internal/types"
-	"marl/internal/watchdog"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/spawner"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/watchdog"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // batchCall 构造 spawn_batch 调用（items + await）。

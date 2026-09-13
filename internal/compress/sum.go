@@ -14,7 +14,7 @@ import (
 	"regexp"
 	"strings"
 
-	"marl/internal/orchestrate"
+	"github.com/RobiNexy/Marl/internal/orchestrate"
 )
 
 // sumSystemPrompt 是 SUM 生成的 system 段（frozen；七段骨架的权威表述）。

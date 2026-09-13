@@ -25,8 +25,8 @@ import (
 	"strings"
 	"time"
 
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // GrantStore 是 grants/ 目录的读写面。

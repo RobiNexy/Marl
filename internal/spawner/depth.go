@@ -7,7 +7,7 @@ package spawner
 import (
 	"fmt"
 
-	"marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/proto"
 )
 
 // depthGate 是裁前的深度/权限裁决。

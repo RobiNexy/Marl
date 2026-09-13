@@ -16,7 +16,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 type fileWriteSkill struct{}

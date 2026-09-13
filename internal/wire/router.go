@@ -1,7 +1,7 @@
 package wire
 
 import (
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // Candidate 是阶段 1 谓词过滤后剩下的一个候选绑定（Part 10.7）。

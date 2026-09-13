@@ -21,7 +21,7 @@ package actor
 import (
 	"strings"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // ActorID 是进程表里统一实体的标识，格式 "human:<uid>"（人类）或既有

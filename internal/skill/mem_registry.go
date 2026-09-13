@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"sync"
 
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // MemRegistry 实现本包的 Registry 接口。

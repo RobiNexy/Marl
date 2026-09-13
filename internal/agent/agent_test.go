@@ -13,9 +13,9 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/skill"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // fakeLLM 按脚本逐轮返回 WireTurn，并记录收到的请求（上下文编译的断言材料）。

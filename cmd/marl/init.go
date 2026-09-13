@@ -24,7 +24,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"marl/internal/fossil"
+	"github.com/RobiNexy/Marl/internal/fossil"
 )
 
 // cmdInit 处理 init 子命令（main.go 分发；兼容位置参数 dir，

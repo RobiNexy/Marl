@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/gate"
-	"marl/internal/skill"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/gate"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 func orchRegistry(t *testing.T) skill.Registry {

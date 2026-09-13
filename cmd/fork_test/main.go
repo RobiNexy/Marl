@@ -24,17 +24,17 @@ import (
 	"strings"
 	"time"
 
-	"marl/internal/actor"
-	"marl/internal/agent"
-	"marl/internal/fossil"
-	"marl/internal/ladder"
-	"marl/internal/ns"
-	"marl/internal/proto"
-	"marl/internal/skill"
-	"marl/internal/spawner"
-	"marl/internal/store"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/actor"
+	"github.com/RobiNexy/Marl/internal/agent"
+	"github.com/RobiNexy/Marl/internal/fossil"
+	"github.com/RobiNexy/Marl/internal/ladder"
+	"github.com/RobiNexy/Marl/internal/ns"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/spawner"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 // options 是命令行选项（与 mini 同一取舍：阶段 5/6 无配置层）。

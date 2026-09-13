@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"marl/internal/store"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 type fakeTable struct {

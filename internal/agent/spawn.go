@@ -11,9 +11,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"marl/internal/proto"
-	"marl/internal/skill"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/skill"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // 意图处理结果回填用的错误码（开放集合的扩展，见 skill 错误码契约）。
@@ -145,7 +145,7 @@ func (a *Agent) executeIntent(ctx context.Context, call types.ToolCall) (*skill.
 // 批准 → 记录子、进入 WaitChildren（eventLoop 在轮边界返回 errWaitChildren）。
 func (a *Agent) intentSpawn(ctx context.Context, call types.ToolCall) (*skill.SkillResult, error) {
 	if a.spawner == nil {
-		return skill.NewFailure(ErrNoSpawner, "spawn_subagent 没有可用的裁决关口（框架装配缺失）"), nil
+		return skill.NewFailure(ErrNoSpawner, "spawn_subagent is not available: no spawner configured (framework assembly bug)"), nil
 	}
 	var args spawnArgs
 	if len(call.Arguments) > 0 {

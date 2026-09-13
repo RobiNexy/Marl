@@ -1,4 +1,4 @@
-module marl
+module github.com/RobiNexy/Marl
 
 go 1.27.0
 

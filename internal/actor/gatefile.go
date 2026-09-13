@@ -17,8 +17,8 @@ import (
 	"strconv"
 	"strings"
 
-	"marl/internal/proto"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // newNonce 生成 8 字节 hex 当轮凭据（与 discuss / 旧 FileApprover 同源）。
@@ -47,12 +47,16 @@ func gateFileOf(human ActorID, req *proto.GateRequest) string {
 		fmt.Fprintf(&sb, "%s\n\n", req.Reason)
 	}
 	fmt.Fprintf(&sb, "属性：%s\n\n", AttributesSummary(req.Attributes))
-	sb.WriteString("裁决（修改下面一行 @ 命令；命令后的行都是批注面）：\n\n")
-	sb.WriteString("@grant once         # 放行这一次\n")
-	sb.WriteString("@grant next 20      # 放行接下来 20 次（额度内不打扰人类）\n")
-	sb.WriteString("@grant tokens 50000 # 追加 50K token 额度\n")
-	sb.WriteString("@always-grant       # 永久放行此类操作（= 动态 allow 规则，落盘）\n")
-	sb.WriteString("@deny\n")
+	// [阶段 12 修正/真机发现 #11] 模板里**不得**出现裸的 @ 命令行——解析器
+	// 读的是"第一个以 @ 开头的行"，自带示例会被当成人类裁决（真机实录：
+	// 无人审批，Agent 被模板自带的 @grant once 自动放行）。示例一律注释化，
+	// 人类把选中的命令**另起一行**写进来才生效。
+	sb.WriteString("裁决：把下面注释里的命令**取消注释**（或另起一行写一个），修改保存即可；命令后的行都是批注面。\n\n")
+	sb.WriteString("# @grant once         # 放行这一次\n")
+	sb.WriteString("# @grant next 20      # 放行接下来 20 次（额度内不打扰人类）\n")
+	sb.WriteString("# @grant tokens 50000 # 追加 50K token 额度\n")
+	sb.WriteString("# @always-grant       # 永久放行此类操作（= 动态 allow 规则，落盘）\n")
+	sb.WriteString("# @deny\n")
 	return sb.String()
 }
 
@@ -214,6 +218,10 @@ func parseInboxFile(content string, human ActorID, nonceOf func(requestID, nonce
 
 // parseGateReply 解析 gate 回执（nonce 对账 + 首个 @ 命令行生效；人类
 // 手写宽容度：未裁决 = 只写了批注 → false 继续等）。
+//
+// [发现 #11 修正] 解析跳过 `#` 注释行——模板里的示例命令是注释形态，
+// 人类取消注释（或另写一行）才是裁决。同时旧模板形态的裸 @ 行仍然
+// 生效（向后兼容：旧文件里人类已改过的行）。
 func parseGateReply(f inboxFile, human ActorID, nonceOf func(requestID, nonce string) bool) (Envelope, bool) {
 	if f.nonce == "" || f.id == "" || f.from == "" {
 		return Envelope{}, false
@@ -227,7 +235,7 @@ func parseGateReply(f inboxFile, human ActorID, nonceOf func(requestID, nonce st
 	found := false
 	for _, ln := range strings.Split(f.body, "\n") {
 		trimmed := strings.TrimSpace(ln)
-		if trimmed == "" || strings.HasPrefix(trimmed, "##") || !strings.HasPrefix(trimmed, "@") {
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "##") || !strings.HasPrefix(trimmed, "@") {
 			continue
 		}
 		if g, ok := gateDirectiveOf(trimmed); ok {
@@ -238,7 +246,7 @@ func parseGateReply(f inboxFile, human ActorID, nonceOf func(requestID, nonce st
 			reply.Reason = g.reason
 			found = true
 		}
-		break // 首个 @ 命令行生效（与旧 FileApprover 的语义一致）
+		break // 首个非注释 @ 命令行生效（与旧 FileApprover 的语义一致）
 	}
 	if !found {
 		return Envelope{}, false

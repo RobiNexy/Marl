@@ -2,7 +2,7 @@ package skill
 
 import (
 	"context"
-	"marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/types"
 )
 
 // Registry 是技能注册表。

@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	"marl/internal/ledger"
+	"github.com/RobiNexy/Marl/internal/ledger"
 
-	"marl/internal/config"
-	"marl/internal/gate"
-	"marl/internal/proto"
-	"marl/internal/store"
-	"marl/internal/types"
-	"marl/internal/wire"
+	"github.com/RobiNexy/Marl/internal/config"
+	"github.com/RobiNexy/Marl/internal/gate"
+	"github.com/RobiNexy/Marl/internal/proto"
+	"github.com/RobiNexy/Marl/internal/store"
+	"github.com/RobiNexy/Marl/internal/types"
+	"github.com/RobiNexy/Marl/internal/wire"
 )
 
 const (
@@ -378,7 +378,7 @@ func TestLLMCallGateNoHumanDenied(t *testing.T) {
 	found := false
 	for _, e := range entriesMust(t, a) {
 		if e.Role == types.RoleToolResult && strings.Contains(e.Content, "GATE_DENIED") &&
-			strings.Contains(e.Content, "人类 Actor 未装配") {
+			strings.Contains(e.Content, "No human approver is configured") {
 			found = true
 		}
 	}
