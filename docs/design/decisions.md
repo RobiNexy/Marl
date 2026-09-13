@@ -1044,3 +1044,22 @@ Run 终结。vendor 响应里的截断信号被折叠，分辨率丢失。
    discussion verdict / escalation 维持既有机制不动。
 2. **真机复验**：say 注入 → 1s 消费归档 → human_note 进 Agent 上下文
    （Log #24）——"下一轮编排自然看到"的语义边界（不保证被执行）不变。
+
+## ADR-0036：GUI 服务接口（阶段 14：`marl serve` + internal/server）
+
+**定位**：GUI 的全部操作都是对 `marl serve`（每项目一个本机守护进程）
+的 HTTP 调用；`internal/server.App` 是装配 + 操作面（CLI 的 runStart 与
+serve 共用同一装配——单一实现点），http.go 是薄传输层。
+
+1. **事件流的单一数据源是 audit_events**（追加只读的旁路真相）——
+   SSE 只做游标轮询（`GET /api/v1/events?since=<seq>`，AfterSeq 过滤
+   是 store 的增量面），不建 pub/sub：GUI 看到的与 CLI/status 同源同序。
+2. **审批/讨论回复走文件通道**：API 的"批准"= 把 @ 命令行写进收件箱
+   文件——GUI 是"人类的笔"，原则 4 的通道语义不变；没有特权后门。
+3. **控制面项目 id = 基名 + 路径哈希**（`<base>-<sha8>`）：dogfooding
+   的测试隔离实证暴露"同名目录共享收件箱/授权库"的串线缺陷——哈希
+   锚定绝对路径后天然隔离。
+4. **默认只绑回环**；跨机访问须自配 token（`MARL_API_TOKEN`）+ TLS。
+5. **配置写入先验证后落盘**（Parse + ParseLimits + ParseGateRules +
+   ValidateRules 全过才写；422 带可读错误）——GUI 的保存键不会把坏
+   配置写进磁盘。

@@ -96,6 +96,7 @@ live outside every agent's write scope.
 | `marl say -to <agent> "text"` | Message a running agent |
 | `marl status` | Live supervision tree + blocked/waiting states |
 | `marl stop [-force]` | Gracefully stop the background task |
+| `marl serve [-addr 127.0.0.1:8731]` | Local service daemon: REST + SSE for GUIs |
 | `marl log -db <db> [-out file.md]` | Export / print conversations |
 | `marl attach -db <db>` | Tail new entries (2s poll) |
 | `marl knowledge lint` | Check the always-on knowledge block budget |
@@ -169,6 +170,33 @@ message.** Messages via `marl say` are injected between rounds — they
 don't interrupt work already in progress.
 
 **Keys and secrets:** export `DEEPSEEK_API_KEY`; never commit it.
+
+## Building on it programmatically (GUI / tools)
+
+`marl serve` runs a local service daemon over one project — every GUI
+operation is an HTTP call. Default address is loopback only.
+
+```bash
+DEEPSEEK_API_KEY=sk-... marl serve -dir ~/my-task -addr 127.0.0.1:8731
+```
+
+| Endpoint | What it does |
+| :-- | :-- |
+| `GET /api/v1/status` | Project, human, run state, agent tree |
+| `POST /api/v1/tasks` `{"task": …}` | Start a task (409 if one is running) |
+| `POST /api/v1/tasks/stop` | Stop the current task |
+| `POST /api/v1/agents/{id}/messages` `{"text": …}` | Message a running agent |
+| `GET /api/v1/inbox` · `GET /api/v1/inbox/{name}` | List / read inbox files |
+| `POST /api/v1/inbox/gate/{id}` `{"action":"allow","mode":"count","count":20}` | Answer an approval |
+| `GET /api/v1/discussions` · `POST /api/v1/discussions/{id}/verdict` | List / reply to discussions |
+| `GET /api/v1/events?since=<seq>` | SSE event stream (audit-backed, resumable) |
+| `GET /api/v1/conversation?agent=…` · `/conversation/export` | Chat log / markdown export |
+| `GET /api/v1/costs` | Cost report (tokens, cache hit, CNY) |
+| `GET/PUT /api/v1/config` · `GET/PUT /api/v1/profiles/{id}` | Validated config editing (422 on mistakes) |
+| `GET /api/v1/doctor` · `GET /api/v1/knowledge/lint` · `POST /api/v1/knowledge/promote|pull` | Diagnostics & knowledge |
+
+Approvals via the API write the same inbox files a human would edit —
+one mechanism, no privileged backdoor.
 
 ## For contributors
 

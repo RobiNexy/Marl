@@ -4163,3 +4163,27 @@ discussion/escalation 已被 Gate 收编、authorship 早就是编码字段；
 
 **单写者提交的真机形态**（首次在 `marl start` 验证）：子 report 收齐 →
 `marl[start-task] 任务完成提交 … (user: agent)` 落 fossil timeline。
+
+---
+
+# Part 15. GUI 服务接口（阶段 14 实现记录，ADR-0036）
+
+GUI 就绪的形态：`marl serve` 对一个项目跑本机守护进程，`internal/server`
+承载两层——App（装配 + 操作面：任务生命周期/监督树/事件/对话/账单/
+插话/收件箱/审批/讨论/配置/Profile/知识库/自检）与 HTTP（REST JSON +
+SSE 事件流）。
+
+四条接口纪律：
+
+1. **事件流 = audit_events 的游标轮询**（`GET /api/v1/events?since=`）——
+   系统的旁路真相就是事件流，不建第二套 pub/sub；GUI 与 CLI 同源同序。
+2. **人类的"笔"仍是文件**：API 的审批/讨论回复写收件箱文件（与手编
+   同一消费路径），权限不因 HTTP 改道（原则 4）。
+3. **控制面项目 id = 基名 + 路径哈希**：同名目录项目隔离（测试隔离
+   实证修正）。
+4. **本机边界**：默认回环；token 可选（MARL_API_TOKEN）；CORS 全开
+   （本机页面框架常态）——跨机部署是使用者的安全责任。
+
+配置的写回闭环：internal/config 新增 Emit（块形态规范化发射器，Parse
+的镜像；往返语义等价测试在案）；GUI 保存 = 验证（Parse/ParseLimits/
+ParseGateRules/ValidateRules）→ 原子写。

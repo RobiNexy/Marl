@@ -89,6 +89,7 @@ Agent 拆活儿时用 `spawn_batch` fork 出子 Agent 并行干；子还能再�
 | `marl say -to <agent> "文本"` | 给运行中的 Agent 插话 |
 | `marl status` | 实时监督树 + 阻塞/等待状态 |
 | `marl stop [-force]` | 优雅停止后台任务 |
+| `marl serve [-addr 127.0.0.1:8731]` | 本机守护进程：REST + SSE（GUI 接入口） |
 | `marl log -db <db> [-out file.md]` | 导出/打印对话 |
 | `marl attach -db <db>` | 滚动 tail 新消息（2s 轮询） |
 | `marl knowledge lint` | 检查常驻知识块的预算 |
@@ -157,6 +158,33 @@ gate_rules:
 **我插话了它不理？** 插话在"轮与轮之间"生效——不会打断已开始的工作。
 
 **密钥安全**：`DEEPSEEK_API_KEY` 走环境变量，不要写进任何文件提交。
+
+## 编程接入（GUI / 工具）
+
+`marl serve` 对一个项目跑本机守护进程——GUI 的每个操作都是一次 HTTP
+调用。默认只绑本机回环地址。
+
+```bash
+DEEPSEEK_API_KEY=sk-... marl serve -dir ~/my-task -addr 127.0.0.1:8731
+```
+
+| 接口 | 干什么 |
+| :-- | :-- |
+| `GET /api/v1/status` | 项目、人类、任务态、监督树 |
+| `POST /api/v1/tasks` `{"task": …}` | 启动任务（进行中返回 409） |
+| `POST /api/v1/tasks/stop` | 停止当前任务 |
+| `POST /api/v1/agents/{id}/messages` `{"text": …}` | 给运行中的 Agent 插话 |
+| `GET /api/v1/inbox` · `GET /api/v1/inbox/{name}` | 收件箱列表 / 详情 |
+| `POST /api/v1/inbox/gate/{id}` `{"action":"allow","mode":"count","count":20}` | 审批答复 |
+| `GET /api/v1/discussions` · `POST /api/v1/discussions/{id}/verdict` | 讨论列表 / 回复 |
+| `GET /api/v1/events?since=<seq>` | SSE 事件流（审计背书、可断点续传） |
+| `GET /api/v1/conversation?agent=…` · `/conversation/export` | 对话流 / Markdown 导出 |
+| `GET /api/v1/costs` | 成本报表（token / 缓存命中 / 人民币） |
+| `GET/PUT /api/v1/config` · `GET/PUT /api/v1/profiles/{id}` | 带校验的配置编辑（写错返回 422） |
+| `GET /api/v1/doctor` · `GET /api/v1/knowledge/lint` · `POST /api/v1/knowledge/promote|pull` | 诊断与知识库 |
+
+通过 API 做的审批写的是**同一个收件箱文件**——和人类手改一份机制，
+没有特权后门。
 
 ## 给贡献者
 

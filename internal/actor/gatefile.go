@@ -307,3 +307,29 @@ func gateDirectiveOf(line string) (gateDirective, bool) {
 	}
 	return gateDirective{}, false
 }
+
+// ---- 导出面（server/GUI 的解析依赖；门面内聚在 actor 包）----
+
+// InboxFileInfo 是收件箱文件的解析产物（GUI 列表的字段源）。
+type InboxFileInfo struct {
+	Type  string
+	ID    string
+	From  string
+	To    string
+	Trace string
+	Body  string
+}
+
+// ParseInboxFileText 解析一份收件文件（frontmatter 字段 + 正文；不做
+// 凭据判定——那是 watcher 的回执对账面）。
+func ParseInboxFileText(content string) (InboxFileInfo, bool) {
+	f, ok := parseInboxText(content)
+	if !ok {
+		return InboxFileInfo{}, false
+	}
+	return InboxFileInfo{Type: f.typ, ID: f.id, From: f.from, To: f.to,
+		Trace: f.trace, Body: f.body}, true
+}
+
+// FileTypeOf 从文件名取类型段（<type>_<ulid>.md）。
+func FileTypeOf(name string) string { return fileTypeOf(name) }

@@ -76,5 +76,8 @@ type AuditFilter struct {
 	Action   string        // "" = 不限（如 "orchestrate"）
 	FromTime time.Time     // 零值 = 不限
 	ToTime   time.Time     // 零值 = 不限
+	// AfterSeq 是游标拉取面（事件流的增量读取：id > AfterSeq；0 = 不限
+	// ——[阶段 14] GUI 的事件流的增量语义，与 Limit 的"默认上限"正交）。
+	AfterSeq int64
 	Limit    int
 }

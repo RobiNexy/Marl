@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/RobiNexy/Marl/internal/server"
 	"strings"
 )
 
@@ -59,8 +61,8 @@ func cmdDoctor(args []string) error {
 		f.Close()
 		return "✓", db
 	})
-	check("控制面可写（"+controlRootOf(root)+"）", func() (string, string) {
-		dir2 := controlRootOf(root)
+	check("控制面可写（"+server.ControlRootOf(root)+"）", func() (string, string) {
+		dir2 := server.ControlRootOf(root)
 		if err := os.MkdirAll(filepath.Join(dir2, "inbox"), 0o755); err != nil {
 			return "✗", "无法创建控制面目录（XDG_STATE_HOME？）：" + err.Error()
 		}

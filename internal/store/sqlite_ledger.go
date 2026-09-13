@@ -320,6 +320,10 @@ func (s *SQLiteStore) queryAudit(ctx context.Context, filter AuditFilter) ([]*Au
 		q += ` AND agent_id = ?`
 		args = append(args, string(filter.AgentID))
 	}
+	if filter.AfterSeq > 0 {
+		q += ` AND id > ?`
+		args = append(args, filter.AfterSeq)
+	}
 	if filter.Action != "" {
 		q += ` AND action = ?`
 		args = append(args, filter.Action)
